@@ -36,8 +36,10 @@ jobs:
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tags=("${GITHUB_REF_NAME}")
+            latest_tag="${GITHUB_REF_NAME}"
           else
             mapfile -t tags < <(git tag --list 'v*' --sort=v:refname)
+            latest_tag="v0.3.12"
           fi
 
           for tag in "${tags[@]}"; do
@@ -53,7 +55,7 @@ jobs:
             fi
           done
 
-          gh release edit v0.3.12 --repo "${GITHUB_REPOSITORY}" --latest
+          gh release edit "${latest_tag}" --repo "${GITHUB_REPOSITORY}" --latest
 
       - name: Update repository description when an administration token is available
         env:

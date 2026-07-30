@@ -33,8 +33,14 @@ class NetBoxAgent:
         if re.search(r"[àâçéèêëîïôùûüÿœ]", text):
             return "fr"
         words = set(re.findall(r"[a-z']+", text))
-        french = {"le", "la", "les", "un", "une", "des", "sur", "avec", "crée", "créer", "ajoute", "attache", "dans", "pour", "merci"}
-        english = {"the", "a", "an", "on", "with", "create", "add", "attach", "in", "for", "please", "delete", "update"}
+        french_strong = {"crée", "créer", "ajoute", "supprime", "modifie", "rattache", "affecte", "merci"}
+        english_strong = {"create", "add", "delete", "update", "attach", "assign", "please", "named", "list", "show", "which", "what"}
+        if words & english_strong:
+            return "en"
+        if words & french_strong:
+            return "fr"
+        french = {"le", "la", "les", "un", "une", "des", "sur", "avec", "dans", "pour"}
+        english = {"the", "a", "an", "on", "with", "in", "for", "at", "from"}
         return "en" if len(words & english) > len(words & french) else "fr"
 
     @staticmethod

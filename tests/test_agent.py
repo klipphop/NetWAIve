@@ -293,6 +293,7 @@ def test_confirmation_matches_the_user_language():
     assert "Changes awaiting" not in french
     assert "Création du site : 'HomeLab'" in french
     assert NetBoxAgent._detect_language("Create a site named HomeLab") == "en"
+    assert NetBoxAgent._detect_language("Create VLAN 493 named Test at site FR01 - Le Fief-Sauvin") == "en"
     assert NetBoxAgent._detect_language("Crée un site nommé HomeLab") == "fr"
     assert NetBoxAgent._detect_language("LAB-01") == "fr"
 

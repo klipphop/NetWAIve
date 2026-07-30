@@ -1,0 +1,63 @@
+name: Publish GitHub Releases
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create missing releases from CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          extract_notes() {
+            local tag="$1"
+            local version="${tag#v}"
+            awk -v header="## [${version}]" '
+              $0 == header { found=1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md
+          }
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tags=("${GITHUB_REF_NAME}")
+          else
+            mapfile -t tags < <(git tag --list 'v*' --sort=v:refname)
+          fi
+
+          for tag in "${tags[@]}"; do
+            notes_file="${RUNNER_TEMP}/${tag}.md"
+            extract_notes "${tag}" > "${notes_file}"
+            if [[ ! -s "${notes_file}" ]]; then
+              printf 'Release %s.\n' "${tag}" > "${notes_file}"
+            fi
+            if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              gh release edit "${tag}" --repo "${GITHUB_REPOSITORY}" --title "${tag}" --notes-file "${notes_file}"
+            else
+              gh release create "${tag}" --repo "${GITHUB_REPOSITORY}" --title "${tag}" --notes-file "${notes_file}"
+            fi
+          done
+
+          gh release edit v0.3.12 --repo "${GITHUB_REPOSITORY}" --latest
+
+      - name: Update repository description
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}" \
+            -f description='NetWAIve - AI-powered NetBox Assistant Plugin'

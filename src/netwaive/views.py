@@ -100,7 +100,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 
 @login_required
 def chat(request):
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.8"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.9"})
 
 
 @login_required
@@ -144,9 +144,11 @@ def chat_api(request):
     agent = NetBoxAgent(_agent_settings())
     normalized = message.lower().strip()
     approved = bool(body.get("approve_pending"))
+    execution_status = "none"
 
     if pending and normalized in {"non", "n", "annule", "annuler"}:
         active["pending_write"] = None
+        execution_status = "cancelled"
         answer = "Action annulée. Aucune écriture NetBox n’a été exécutée."
     elif pending and (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide"}):
         if not _can_write(request.user):
@@ -157,6 +159,7 @@ def chat_api(request):
             pending_history = pending.get("history") if isinstance(pending.get("history"), list) else active.get("history", [])
             result = agent.confirm(str(pending.get("message") or ""), calls, history=pending_history)
             answer = result.message
+            execution_status = "success" if len(result.tool_results) == len(calls) and all(item.ok for item in result.tool_results) else "failed"
             if result.pending_confirmation:
                 active["pending_write"] = {
                     "message": str(pending.get("message") or ""),
@@ -187,7 +190,7 @@ def chat_api(request):
     _append_history(active, "user", message)
     _append_history(active, "assistant", answer)
     _save_state(request, state)
-    return JsonResponse({**_state_payload(state), "message": answer, "conversation_id": active["id"]})
+    return JsonResponse({**_state_payload(state), "message": answer, "conversation_id": active["id"], "execution_status": execution_status})
 
 
 @login_required

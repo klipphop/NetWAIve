@@ -321,6 +321,7 @@ class NetBoxAgent:
         read_targets: set[tuple[str, str]],
         observed_ids: set[int],
         language: str,
+        observed_records: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
     ) -> ToolResult | None:
         target = cls._target_key(arguments)
         if target not in read_targets:
@@ -332,6 +333,22 @@ class NetBoxAgent:
             return ToolResult(ok=False, message=message, data={"strict_ro_check_required": True})
         data = arguments.get("data") if isinstance(arguments.get("data"), dict) else {}
         action = str(arguments.get("action") or "").lower()
+        if action == "create":
+            records = (observed_records or {}).get(target, [])
+            identity_fields = ("name", "prefix", "address", "slug", "vid")
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                for field in identity_fields:
+                    requested = data.get(field)
+                    observed = record.get(field)
+                    if requested not in (None, "") and observed not in (None, "") and str(requested).casefold() == str(observed).casefold():
+                        resource = cls._resource_label(target[1], data)
+                        return ToolResult(
+                            ok=False,
+                            message=f"{resource} déjà présent dans NetBox : aucune création supplémentaire n’est nécessaire.",
+                            data={"existing_object": True, "resource": resource},
+                        )
         if target == ("dcim", "interfaces") and action == "create":
             name = str(data.get("name") or "")
             interface_type = str(data.get("type") or "").lower()
@@ -420,6 +437,7 @@ class NetBoxAgent:
         tool_outputs: dict[str, dict[str, Any]] = {}
         read_targets: set[tuple[str, str]] = set()
         observed_ids: set[int] = set()
+        observed_records: dict[tuple[str, str], list[dict[str, Any]]] = {}
         signatures = {self._call_signature(call) for call in write_plan}
         missing_recovery_used = False
 
@@ -470,7 +488,7 @@ class NetBoxAgent:
             for call, arguments in parsed:
                 if call.function.name in self.tools.MUTATING_TOOLS and not confirm_write:
                     arguments = self._resolve_available_references(arguments, tool_outputs)
-                    guard = self._write_guard(arguments, read_targets, observed_ids, language)
+                    guard = self._write_guard(arguments, read_targets, observed_ids, language, observed_records)
                     if guard is not None:
                         result = guard
                         collected.append(result)
@@ -489,6 +507,10 @@ class NetBoxAgent:
                         read_targets.add(self._target_key(arguments))
                         if result.ok:
                             observed_ids.update(self._collect_observed_ids(result.data))
+                            records = result.data if isinstance(result.data, list) else [result.data]
+                            observed_records.setdefault(self._target_key(arguments), []).extend(
+                                record for record in records if isinstance(record, dict)
+                            )
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.id,
@@ -526,7 +548,7 @@ class NetBoxAgent:
         *,
         history: list[dict[str, str]] | None = None,
     ) -> AgentResponse:
-        """Exécute le lot confirmé dans l'ordre, résout les IDs, puis reprend l'agent."""
+        """Exécute exactement le lot approuvé et clôt immédiatement ce cycle."""
         results: list[ToolResult] = []
         outputs: dict[str, dict[str, Any]] = {}
         for call in pending:
@@ -541,23 +563,15 @@ class NetBoxAgent:
             if not result.ok:
                 break
 
-        observations = "\n".join(
-            f"- {result.model_dump_json()}" for result in results
-        )
-        language = self._detect_language(user_message)
-        continuation = (
-            "Le lot confirmé a été exécuté séquentiellement. Voici les résultats réels. Vérifie l'accomplissement complet de l'ordre initial ; poursuis uniquement s'il reste une action explicitement incluse dans cet ordre.\n"
-            if language == "fr"
-            else "The approved batch was executed sequentially. These are the actual results. Verify that the original request is complete; continue only if an explicitly requested action remains.\n"
-        )
-        messages = self._messages(user_message, history)
-        messages.append({
-            "role": "user",
-            "content": continuation + observations,
-        })
-        return self._loop(
-            messages,
-            confirm_write=False,
-            results=results,
-            language=self._detect_language(user_message),
-        )
+        if results and all(result.ok for result in results) and len(results) == len(pending):
+            message = (
+                f"Les {len(results)} opération(s) validée(s) ont été exécutées avec succès. "
+                "La configuration demandée est maintenant en place."
+            )
+        else:
+            completed = sum(1 for result in results if result.ok)
+            message = (
+                f"Exécution interrompue : {completed} opération(s) sur {len(pending)} ont réussi. "
+                "Aucune opération restante n’a été relancée automatiquement."
+            )
+        return AgentResponse(message=message, tool_results=results)

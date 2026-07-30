@@ -123,16 +123,19 @@ def test_universal_write_requires_confirmation():
     assert "dcim/devices" not in result.message
 
 
-def test_confirm_executes_exact_call_and_resumes_agent():
+def test_confirm_executes_exact_call_and_closes_without_replanning():
     pending = [PendingToolCall(
         id="call-1",
         name="netbox_write",
         arguments={"app": "dcim", "endpoint": "devices", "action": "create", "data": {"name": "sw-02"}},
     )]
-    agent = NetBoxAgent(settings(), tools=FakeTools(), client=FakeClient([Message("Création confirmée.")]))
+    client = FakeClient([Message(tool_calls=[tool_call("netbox_write", {"app": "dcim", "endpoint": "devices", "action": "create", "data": {"name": "duplicate"}})])])
+    agent = NetBoxAgent(settings(), tools=FakeTools(), client=client)
     result = agent.confirm("Crée sw-02", pending)
-    assert result.message == "Création confirmée."
+    assert "exécutées avec succès" in result.message
+    assert result.pending_confirmation == []
     assert result.tool_results[0].data["app"] == "dcim"
+    assert client.calls == []
 
 
 def test_composite_order_produces_one_global_confirmation():
@@ -296,6 +299,20 @@ def test_l3_interface_name_cannot_be_derived_from_an_ip():
     assert result is not None
     assert result.data["invalid_l3_interface_name"] is True
     assert "Vlan71" in result.message
+
+
+def test_create_guard_blocks_an_existing_object_after_live_read():
+    args = {"app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "LAB-PARIS-01"}}
+    result = NetBoxAgent._write_guard(
+        args,
+        {("dcim", "sites")},
+        {10},
+        "fr",
+        {("dcim", "sites"): [{"id": 10, "name": "LAB-PARIS-01"}]},
+    )
+    assert result is not None
+    assert result.data["existing_object"] is True
+    assert "aucune création supplémentaire" in result.message
 
 
 def test_write_guard_requires_live_read_and_observed_update_id():

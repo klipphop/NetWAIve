@@ -28,7 +28,7 @@ jobs:
             local tag="$1"
             local version="${tag#v}"
             awk -v header="## [${version}]" '
-              $0 == header { found=1; next }
+              index($0, header) == 1 { found=1; next }
               found && /^## \[/ { exit }
               found { print }
             ' CHANGELOG.md

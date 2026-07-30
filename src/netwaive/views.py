@@ -14,14 +14,14 @@ from .agent import NetBoxAgent
 from .config import Settings
 from .models import PendingToolCall
 
-SESSION_KEY = "netbox_llm_chat_state"
+SESSION_KEY = "netwaive_state"
 MAX_HISTORY = 100
 MAX_SESSIONS = 8
 
 
 def _plugin_config() -> dict[str, Any]:
     configs = getattr(django_settings, "PLUGINS_CONFIG", {}) or {}
-    return dict(configs.get("netbox_llm_chat", {}) or {})
+    return dict(configs.get("netwaive", {}) or {})
 
 
 def _agent_settings() -> Settings:
@@ -100,7 +100,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 
 @login_required
 def chat(request):
-    return render(request, "netbox_llm_chat/chat.html", {"plugin_version": "0.2.0"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.8"})
 
 
 @login_required
@@ -143,11 +143,12 @@ def chat_api(request):
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
     agent = NetBoxAgent(_agent_settings())
     normalized = message.lower().strip()
+    approved = bool(body.get("approve_pending"))
 
     if pending and normalized in {"non", "n", "annule", "annuler"}:
         active["pending_write"] = None
         answer = "Action annulée. Aucune écriture NetBox n’a été exécutée."
-    elif pending and normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide"}:
+    elif pending and (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide"}):
         if not _can_write(request.user):
             active["pending_write"] = None
             answer = "Écriture non autorisée pour ce compte NetBox."

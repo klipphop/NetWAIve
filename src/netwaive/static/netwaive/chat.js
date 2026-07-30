@@ -1,9 +1,9 @@
 (() => {
-  const messages = document.getElementById("netbox-llm-chat-messages");
-  const form = document.getElementById("netbox-llm-chat-form");
-  const input = document.getElementById("netbox-llm-chat-input");
-  const status = document.getElementById("netbox-llm-chat-status");
-  const clearButton = document.getElementById("netbox-llm-chat-clear");
+  const messages = document.getElementById("netwaive-messages");
+  const form = document.getElementById("netwaive-form");
+  const input = document.getElementById("netwaive-input");
+  const status = document.getElementById("netwaive-status");
+  const clearButton = document.getElementById("netwaive-clear");
   let conversationId = null;
   let pendingWrite = null;
 
@@ -25,7 +25,7 @@
           html += "</code></pre>";
           codeBlock = false;
         } else {
-          html += "<pre class=\"netbox-llm-chat-code\"><code>";
+          html += "<pre class=\"netwaive-code\"><code>";
           codeBlock = true;
         }
         continue;
@@ -38,7 +38,7 @@
         const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(x => x.trim());
         if (cells.every(x => /^:?-{3,}:?$/.test(x))) continue;
         if (!table) {
-          html += "<table class=\"netbox-llm-chat-table\"><thead><tr>" + cells.map(x => `<th>${inline(x)}</th>`).join("") + "</tr></thead><tbody>";
+          html += "<table class=\"netwaive-table\"><thead><tr>" + cells.map(x => `<th>${inline(x)}</th>`).join("") + "</tr></thead><tbody>";
           table = true;
         } else {
           html += "<tr>" + cells.map(x => `<td>${inline(x)}</td>`).join("") + "</tr>";
@@ -46,11 +46,11 @@
       } else {
         closeTable();
         const value = line.trim();
-        if (!value) { html += "<div class=\"netbox-llm-chat-spacer\"></div>"; continue; }
+        if (!value) { html += "<div class=\"netwaive-spacer\"></div>"; continue; }
         if (value.startsWith("### ")) html += `<h4>${inline(value.slice(4))}</h4>`;
         else if (value.startsWith("## ")) html += `<h3>${inline(value.slice(3))}</h3>`;
         else if (value.startsWith("# ")) html += `<h2>${inline(value.slice(2))}</h2>`;
-        else if (/^[-*] /.test(value)) html += `<div class=\"netbox-llm-chat-list-item\">• ${inline(value.slice(2))}</div>`;
+        else if (/^[-*] /.test(value)) html += `<div class=\"netwaive-list-item\">• ${inline(value.slice(2))}</div>`;
         else html += `<p>${inline(value)}</p>`;
       }
     }
@@ -81,10 +81,10 @@
   };
 
   const renderPendingControls = () => {
-    document.getElementById("netbox-llm-chat-confirm-wrap")?.remove();
+    document.getElementById("netwaive-confirm-wrap")?.remove();
     if (!pendingWrite) return;
     const wrap = document.createElement("div");
-    wrap.id = "netbox-llm-chat-confirm-wrap";
+    wrap.id = "netwaive-confirm-wrap";
     wrap.className = "d-flex gap-2 mt-2 justify-content-end";
 
     const yes = document.createElement("button");
@@ -97,12 +97,12 @@
     no.className = "btn btn-sm btn-outline-danger";
     no.textContent = "Annuler";
 
-    const sendQuick = async (message) => {
+    const sendQuick = async (message, approvePending = false) => {
       add("user", message);
-      const response = await fetch("/plugins/netbox-llm-chat/api/chat/", {
+      const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, conversation_id: conversationId }),
+        body: JSON.stringify({ message, conversation_id: conversationId, approve_pending: approvePending }),
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
@@ -116,7 +116,7 @@
 
     yes.addEventListener("click", async () => {
       yes.disabled = true; no.disabled = true;
-      try { await sendQuick("oui"); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
+      try { await sendQuick("oui", true); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
       finally { yes.disabled = false; no.disabled = false; }
     });
     no.addEventListener("click", async () => {
@@ -137,7 +137,7 @@
     conversationId = null;
     pendingWrite = null;
     renderPendingControls();
-    const response = await fetch("/plugins/netbox-llm-chat/api/history/clear/", {
+    const response = await fetch("/plugins/netwaive/api/history/clear/", {
       method: "POST",
       headers: { "X-CSRFToken": token, "Cache-Control": "no-store" },
     });
@@ -145,7 +145,7 @@
     conversationId = data.active_session_id || null;
   });
 
-  fetch("/plugins/netbox-llm-chat/api/history/", { credentials: "same-origin" })
+  fetch("/plugins/netwaive/api/history/", { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => {
       (data.history || []).forEach(item => add(item.role, item.text));
@@ -155,7 +155,7 @@
     })
     .catch(() => {});
 
-  fetch("/plugins/netbox-llm-chat/api/health/", { credentials: "same-origin" })
+  fetch("/plugins/netwaive/api/health/", { credentials: "same-origin" })
     .then(async r => {
       if (!r.ok || !(r.headers.get("content-type") || "").includes("application/json")) throw new Error(`HTTP ${r.status}`);
       return r.json();
@@ -175,7 +175,7 @@
     const button = form.querySelector("button");
     button.disabled = true;
     try {
-      const response = await fetch("/plugins/netbox-llm-chat/api/chat/", {
+      const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
         body: JSON.stringify({ message, conversation_id: conversationId }),

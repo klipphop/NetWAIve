@@ -29,13 +29,8 @@ class NetBoxAgent:
 
     @staticmethod
     def _detect_language(user_message: str) -> str:
-        text = user_message.lower()
-        if re.search(r"[àâçéèêëîïôùûüÿœ]", text):
-            return "fr"
-        words = set(re.findall(r"[a-z']+", text))
-        french = {"le", "la", "les", "un", "une", "des", "sur", "avec", "créer", "ajoute", "attache", "dans", "pour", "site"}
-        english = {"the", "a", "an", "on", "with", "create", "add", "attach", "in", "for", "site", "please"}
-        return "fr" if len(words & french) > len(words & english) else "en"
+        """NetWAIve est volontairement francophone côté interface et confirmations."""
+        return "fr"
 
     @staticmethod
     def _messages(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
@@ -107,12 +102,34 @@ class NetBoxAgent:
         if isinstance(value, int) and len(labels.get(value, set())) == 1:
             return next(iter(labels[value]))
         if isinstance(value, int):
-            return "élément vérifié"
+            return ""
         if isinstance(value, str):
             return value
         if value is None:
             return ""
         return str(value)
+
+    @staticmethod
+    def _resource_label(endpoint: str, data: dict[str, Any] | None = None) -> str:
+        labels = {
+            "manufacturers": "Fabricant",
+            "device-types": "Type d’équipement",
+            "devices": "Équipement",
+            "sites": "Site",
+            "ip-addresses": "Adresse IP",
+            "prefixes": "Préfixe",
+            "vlans": "VLAN",
+            "interfaces": "Interface",
+            "cables": "Câble",
+            "vlan-groups": "Groupe de VLANs",
+            "custom-fields": "Champ personnalisé",
+            "platforms": "Plateforme",
+            "device-roles": "Rôle d’équipement",
+        }
+        normalized = str(endpoint or "").replace("_", "-").lower()
+        if normalized == "interfaces" and str((data or {}).get("type") or "").lower() == "lag":
+            return "LAG"
+        return labels.get(normalized, "Objet NetBox")
 
     @classmethod
     def _planned_business_labels(
@@ -127,13 +144,13 @@ class NetBoxAgent:
             if endpoint == "vlans":
                 name = data.get("name")
                 vid = data.get("vid")
-                label = str(name or (f"VLAN {vid}" if vid is not None else "nouveau VLAN"))
+                label = str(name or (f"VLAN {vid}" if vid is not None else "VLAN"))
             elif endpoint == "prefixes":
-                label = str(data.get("prefix") or "nouveau préfixe")
+                label = str(data.get("prefix") or "Préfixe")
             elif endpoint == "ip-addresses":
-                label = str(data.get("address") or "nouvelle adresse IP")
+                label = str(data.get("address") or "Adresse IP")
             else:
-                label = str(data.get("name") or data.get("display") or data.get("address") or "nouvel objet")
+                label = str(data.get("name") or data.get("model") or data.get("display") or data.get("address") or cls._resource_label(endpoint, data))
             planned[call.id] = cls._business_value(label, labels, planned)
         return planned
 
@@ -179,7 +196,7 @@ class NetBoxAgent:
                 continue
             value = cls._business_value(data[key], labels, planned_labels)
             if value == "__planned_reference__":
-                value = planned_relations.get(key, "élément planifié")
+                value = planned_relations.get(key, {"site": "Site", "vlan": "VLAN", "device": "Équipement", "lag": "LAG"}.get(key, "Objet NetBox"))
             if not value:
                 continue
             if language == "fr":
@@ -203,96 +220,79 @@ class NetBoxAgent:
         labels = cls._collect_id_labels(outputs)
         planned_labels = cls._planned_business_labels(pending, labels)
         planned_relations = cls._planned_relation_labels(pending)
-        lines = [
-            "Modifications en attente de votre validation :"
-            if language == "fr"
-            else "Changes awaiting your approval:"
-        ]
+        lines = ["Modifications en attente de votre validation :"]
 
         for call in pending:
             args = call.arguments
             data = dict(args.get("data")) if isinstance(args.get("data"), dict) else {}
             endpoint = str(args.get("endpoint") or "").replace("_", "-").lower()
             action = str(args.get("action") or "create").lower()
-            relation = cls._relation_suffix(data, labels, planned_labels, planned_relations, language=language)
-            name = cls._business_value(data.get("name"), labels, planned_labels)
+            resource = cls._resource_label(endpoint, data)
+            relation = cls._relation_suffix(data, labels, planned_labels, planned_relations, language="fr")
+            name = cls._business_value(data.get("name") or data.get("model"), labels, planned_labels)
             target = cls._business_value(data.get("id"), labels, planned_labels)
+            display = target or name or planned_labels.get(call.id, resource)
 
-            if language == "fr":
-                if endpoint == "sites" and action == "create":
-                    line = f"• Création du site : '{name}'"
-                elif endpoint == "devices" and action == "create":
-                    if re.match(r"(?i)^(srv|server)", name or ""):
-                        line = f"• Création du serveur : '{name}'{relation}"
-                    else:
-                        line = f"• Création de l’équipement : '{name}'{relation}"
-                elif endpoint == "interfaces" and action == "create" and str(data.get("type") or "").lower() == "lag":
-                    line = f"• Création du LAG : '{name}'{relation}"
-                elif endpoint == "vlans" and action == "create":
-                    vid = data.get("vid")
-                    line = f"• Création du VLAN : VID {vid} — Nom '{name}'{relation}"
-                elif endpoint == "prefixes" and action == "create":
-                    prefix = cls._business_value(data.get("prefix"), labels, planned_labels)
-                    line = f"• Création du préfixe : {prefix}{relation}"
-                    if data.get("is_pool") is True:
-                        line += " — Utilisé comme pool d’adresses"
-                elif endpoint == "ip-addresses":
-                    address = cls._business_value(data.get("address"), labels, planned_labels)
-                    destination = cls._business_value(
-                        data.get("device") or data.get("assigned_object_id") or data.get("interface"),
-                        labels,
-                        planned_labels,
-                    )
-                    if destination == "__planned_reference__":
-                        destination = planned_relations.get("device", "la cible prévue")
-                    source_prefix = planned_relations.get("prefix") or next((value for value in planned_labels.values() if "/" in value), "le préfixe prévu")
-                    if not address or address == "__planned_reference__" or address == "nouvelle adresse IP":
-                        line = f"• Attribution d’IP : La première IP disponible dans {source_prefix} sera attribuée"
-                    else:
-                        line = f"• Attribution d’IP : L’adresse {address} sera attribuée"
-                    if destination:
-                        line += f" à {destination}"
-                    line += " dès validation."
-                elif endpoint == "interfaces" and action == "update" and "lag" in data:
-                    interface = target or name or "l’interface sélectionnée"
-                    lag = cls._business_value(data.get("lag"), labels, planned_labels)
-                    if lag == "__planned_reference__":
-                        lag = planned_relations.get("lag", "LAG planifié")
-                    line = f"• Rattachement de l’interface '{interface}' au LAG '{lag}'"
-                elif endpoint == "prefixes" and action == "update" and "vlan" in data:
-                    prefix = target or cls._business_value(data.get("prefix"), labels, planned_labels) or "le préfixe créé"
-                    vlan = cls._business_value(data.get("vlan"), labels, planned_labels)
-                    if vlan == "__planned_reference__":
-                        vlan = planned_relations.get("vlan", "VLAN planifié")
-                    line = f"• Rattachement du préfixe {prefix} au VLAN '{vlan}'{relation}"
-                elif action == "delete":
-                    line = f"• Suppression de l’objet : '{target or name or planned_labels.get(call.id, 'élément sélectionné')}'"
-                elif action == "update":
-                    line = f"• Mise à jour de l’objet : '{target or name or 'élément sélectionné'}'{relation}"
+            if action == "delete":
+                if endpoint == "ip-addresses":
+                    address = cls._business_value(data.get("address"), labels, planned_labels) or display
+                    line = f"• Suppression de l’adresse IP : '{address}'"
                 else:
-                    line = f"• Création de l’objet : '{name or planned_labels.get(call.id, 'nouvel élément')}'{relation}"
+                    line = f"• Suppression : {resource} '{display}'"
+            elif endpoint == "sites" and action == "create":
+                line = f"• Création du site : '{name or resource}'"
+            elif endpoint == "devices" and action == "create":
+                if re.match(r"(?i)^(srv|server)", name or ""):
+                    line = f"• Création du serveur : '{name}'{relation}"
+                else:
+                    line = f"• Création de l’équipement : '{name or resource}'{relation}"
+            elif endpoint == "interfaces" and action == "create" and str(data.get("type") or "").lower() == "lag":
+                line = f"• Création du LAG : '{name or resource}'{relation}"
+            elif endpoint == "vlans" and action == "create":
+                vid = data.get("vid")
+                line = f"• Création du VLAN : VID {vid} — Nom '{name or resource}'{relation}"
+            elif endpoint == "prefixes" and action == "create":
+                prefix = cls._business_value(data.get("prefix"), labels, planned_labels) or resource
+                line = f"• Création du préfixe : {prefix}{relation}"
+                if data.get("is_pool") is True:
+                    line += " — Utilisé comme pool d’adresses"
+            elif endpoint == "ip-addresses":
+                address = cls._business_value(data.get("address"), labels, planned_labels)
+                destination = cls._business_value(
+                    data.get("device") or data.get("assigned_object_id") or data.get("interface"),
+                    labels,
+                    planned_labels,
+                )
+                if destination == "__planned_reference__":
+                    destination = planned_relations.get("device", "la cible prévue")
+                source_prefix = planned_relations.get("prefix") or next((value for value in planned_labels.values() if "/" in value), "le préfixe prévu")
+                if not address or address == "__planned_reference__" or address == "Adresse IP":
+                    line = f"• Attribution d’IP : La première IP disponible dans {source_prefix} sera attribuée"
+                else:
+                    line = f"• Attribution d’IP : L’adresse {address} sera attribuée"
+                if destination:
+                    line += f" à {destination}"
+                line += " dès validation."
+            elif endpoint == "interfaces" and action == "update" and "lag" in data:
+                interface = target or name or "Interface"
+                lag = cls._business_value(data.get("lag"), labels, planned_labels)
+                if lag == "__planned_reference__":
+                    lag = planned_relations.get("lag", "LAG")
+                line = f"• Rattachement de l’interface '{interface}' au LAG '{lag}'"
+            elif endpoint == "prefixes" and action == "update" and "vlan" in data:
+                prefix = target or cls._business_value(data.get("prefix"), labels, planned_labels) or "Préfixe"
+                vlan = cls._business_value(data.get("vlan"), labels, planned_labels)
+                if vlan == "__planned_reference__":
+                    vlan = planned_relations.get("vlan", "VLAN")
+                line = f"• Rattachement du préfixe {prefix} au VLAN '{vlan}'{relation}"
+            elif action == "update":
+                line = f"• Mise à jour : {resource} '{display}'{relation}"
             else:
-                object_name = name or target or planned_labels.get(call.id, "selected object")
-                if endpoint == "sites" and action == "create":
-                    line = f"• Create site: '{object_name}'"
-                elif endpoint == "vlans" and action == "create":
-                    line = f"• Create VLAN: VID {data.get('vid')} — Name '{object_name}'{relation}"
-                elif endpoint == "prefixes" and action == "create":
-                    line = f"• Create prefix: {cls._business_value(data.get('prefix'), labels, planned_labels)}{relation}"
-                elif action == "delete":
-                    line = f"• Delete: '{object_name}'"
-                elif action == "update":
-                    line = f"• Update: '{object_name}'{relation}"
-                else:
-                    line = f"• Create: '{object_name}'{relation}"
+                line = f"• Création : {resource} '{display}'{relation}"
             lines.append(line)
 
-        lines.append(
-            "\nConfirmez-vous l’exécution de ces opérations ?"
-            if language == "fr"
-            else "\nDo you approve these operations?"
-        )
-        return "\n".join(lines).replace("__planned_reference__", "élément planifié")
+        lines.append("\nConfirmez-vous l’exécution de ces opérations ?")
+        return "\n".join(lines).replace("__planned_reference__", "Objet NetBox")
 
     @staticmethod
     def _target_key(arguments: dict[str, Any]) -> tuple[str, str]:
@@ -332,6 +332,19 @@ class NetBoxAgent:
             return ToolResult(ok=False, message=message, data={"strict_ro_check_required": True})
         data = arguments.get("data") if isinstance(arguments.get("data"), dict) else {}
         action = str(arguments.get("action") or "").lower()
+        if target == ("dcim", "interfaces") and action == "create":
+            name = str(data.get("name") or "")
+            interface_type = str(data.get("type") or "").lower()
+            ip_derived_name = re.fullmatch(r"(?:l3[-_.]?)?\d{1,3}(?:\.\d{1,3}){3}", name, re.IGNORECASE)
+            if interface_type in {"virtual", "l3"} and ip_derived_name:
+                return ToolResult(
+                    ok=False,
+                    message=(
+                        "Nom d’interface L3 refusé : une adresse IP ne doit pas servir de nom. "
+                        "Utilise une SVI telle que Vlan71 ou l’interface physique explicitement demandée."
+                    ),
+                    data={"invalid_l3_interface_name": True},
+                )
         object_id = data.get("id") if isinstance(data, dict) else None
         if action in {"update", "delete"} and isinstance(object_id, int) and object_id not in observed_ids:
             message = (

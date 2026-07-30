@@ -3,8 +3,8 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "netbox-llm-chat"
-version = "0.3.7"
+name = "netwaive"
+version = "0.3.8"
 description = "Assistant LLM NetBox avec tools pynetbox typés"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,7 +21,7 @@ dependencies = [
 dev = ["pytest>=8", "build>=1.2"]
 
 [project.scripts]
-netbox-llm-chat = "netbox_llm_chat.cli:main"
+netwaive = "netwaive.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -30,7 +30,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-netbox_llm_chat = ["templates/**/*.html", "static/**/*"]
+netwaive = ["templates/**/*.html", "static/**/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

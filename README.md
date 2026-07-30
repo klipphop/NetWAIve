@@ -1,16 +1,16 @@
-# NetBox LLM Chat
+# NetWAIve
 
 Package Python autonome fournissant un agent LLM à double casquette : expert IT/réseau et opérateur NetBox RO/RW. Toutes les opérations NetBox utilisent exclusivement `pynetbox`.
 
 ## Arborescence
 
 ```text
-netbox_llm_chat/
+netwaive/
 ├── pyproject.toml
 ├── setup.py
 ├── .env.example
 ├── README.md
-├── src/netbox_llm_chat/
+├── src/netwaive/
 │   ├── __init__.py
 │   ├── __main__.py
 │   ├── agent.py
@@ -23,10 +23,10 @@ netbox_llm_chat/
 │   ├── template_content.py
 │   ├── urls.py
 │   ├── views.py
-│   ├── templates/netbox_llm_chat/
+│   ├── templates/netwaive/
 │   │   ├── chat.html
 │   │   └── floating_widget.html
-│   ├── static/netbox_llm_chat/
+│   ├── static/netwaive/
 │   │   ├── chat.js
 │   │   ├── floating.css
 │   │   └── floating.js
@@ -38,7 +38,7 @@ netbox_llm_chat/
 ## Installation production
 
 ```bash
-cd /chemin/netbox_llm_chat
+cd /chemin/netwaive
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
@@ -56,7 +56,7 @@ Construction d'un wheel :
 
 ```bash
 python -m build
-pip install dist/netbox_llm_chat-0.3.7-py3-none-any.whl
+pip install dist/netwaive-0.3.8-py3-none-any.whl
 ```
 
 ## Configuration
@@ -86,11 +86,11 @@ Installer le wheel dans le venv NetBox puis ajouter le package à `configuration
 import os
 
 PLUGINS = [
-    "netbox_llm_chat",
+    "netwaive",
 ]
 
 PLUGINS_CONFIG = {
-    "netbox_llm_chat": {
+    "netwaive": {
         "write_enabled": False,
         "netbox_url": "https://netbox.example.org",
         "netbox_token": os.environ["NETBOX_LLM_NETBOX_TOKEN"],
@@ -103,17 +103,17 @@ PLUGINS_CONFIG = {
 ```
 
 ```bash
-/opt/netbox/venv/bin/pip install dist/netbox_llm_chat-0.3.7-py3-none-any.whl
+/opt/netbox/venv/bin/pip install dist/netwaive-0.3.8-py3-none-any.whl
 /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py check
 systemctl restart netbox netbox-rq
 ```
 
-La version `0.3.7` inclut le widget global flottant/docké et une page de chat dédiée. Le widget est injecté via `PluginTemplateExtension` lorsque le plugin est activé dans `PLUGINS`.
+La version `0.3.8` inclut le widget global flottant/docké et une page de chat dédiée. Le widget est injecté via `PluginTemplateExtension` lorsque le plugin est activé dans `PLUGINS`.
 
 ## Utilisation Python
 
 ```python
-from netbox_llm_chat import NetBoxAgent, Settings
+from netwaive import NetBoxAgent, Settings
 
 agent = NetBoxAgent(Settings())
 
@@ -140,9 +140,9 @@ print(result.message)
 ## CLI
 
 ```bash
-netbox-llm-chat "Explique le route-reflector BGP"
-netbox-llm-chat "Recherche les devices core"
-netbox-llm-chat --confirm-write "Crée le device sw-02 ..."
+netwaive "Explique le route-reflector BGP"
+netwaive "Recherche les devices core"
+netwaive --confirm-write "Crée le device sw-02 ..."
 ```
 
 ## Tools universels exposés au LLM

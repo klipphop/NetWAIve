@@ -1,25 +1,25 @@
 (() => {
-  document.querySelectorAll(".netbox-llm-chat-widget").forEach((widget) => {
+  document.querySelectorAll(".netwaive-widget").forEach((widget) => {
     if (widget.dataset.initialized === "1") return;
     widget.dataset.initialized = "1";
 
-    const fab = widget.querySelector(".netbox-llm-chat-fab");
-    const drawer = widget.querySelector(".netbox-llm-chat-drawer");
-    const closeBtn = widget.querySelector(".netbox-llm-chat-close");
-    const clearBtn = widget.querySelector(".netbox-llm-chat-clear");
-    const dockBtn = widget.querySelector(".netbox-llm-chat-dock");
-    const tabAddBtn = widget.querySelector(".netbox-llm-chat-tab-add");
-    const tabsEl = widget.querySelector(".netbox-llm-chat-tabs");
-    const dragHandle = widget.querySelector("[data-netbox-llm-chat-drag-handle]");
-    const resizeHandle = widget.querySelector(".netbox-llm-chat-resize-handle");
-    const form = widget.querySelector(".netbox-llm-chat-drawer-form");
-    const input = widget.querySelector(".netbox-llm-chat-drawer-input");
-    const messages = widget.querySelector(".netbox-llm-chat-drawer-messages");
-    const status = widget.querySelector(".netbox-llm-chat-drawer-status");
+    const fab = widget.querySelector(".netwaive-fab");
+    const drawer = widget.querySelector(".netwaive-drawer");
+    const closeBtn = widget.querySelector(".netwaive-close");
+    const clearBtn = widget.querySelector(".netwaive-clear");
+    const dockBtn = widget.querySelector(".netwaive-dock");
+    const tabAddBtn = widget.querySelector(".netwaive-tab-add");
+    const tabsEl = widget.querySelector(".netwaive-tabs");
+    const dragHandle = widget.querySelector("[data-netwaive-drag-handle]");
+    const resizeHandle = widget.querySelector(".netwaive-resize-handle");
+    const form = widget.querySelector(".netwaive-drawer-form");
+    const input = widget.querySelector(".netwaive-drawer-input");
+    const messages = widget.querySelector(".netwaive-drawer-messages");
+    const status = widget.querySelector(".netwaive-drawer-status");
 
-    const POS_KEY = "netbox-llm-chat-window-pos-v3";
-    const LAYOUT_KEY = "netbox-llm-chat-layout-v1";
-    const OPEN_KEY = "netbox-llm-chat-open-v1";
+    const POS_KEY = "netwaive-window-pos-v3";
+    const LAYOUT_KEY = "netwaive-layout-v1";
+    const OPEN_KEY = "netwaive-open-v1";
     const csrf = () => document.cookie.split(";").map(x => x.trim()).find(x => x.startsWith("csrftoken="))?.split("=").slice(1).join("=") || form.querySelector("input[name=csrfmiddlewaretoken]")?.value || "";
 
     const state = {
@@ -32,14 +32,14 @@
     };
 
     const api = {
-      history: "/plugins/netbox-llm-chat/api/history/",
-      newSession: "/plugins/netbox-llm-chat/api/sessions/new/",
-      selectSession: "/plugins/netbox-llm-chat/api/sessions/select/",
-      deleteSession: "/plugins/netbox-llm-chat/api/sessions/delete/",
-      clearSession: "/plugins/netbox-llm-chat/api/history/clear/",
-      chat: "/plugins/netbox-llm-chat/api/chat/",
-      health: "/plugins/netbox-llm-chat/api/health/",
-      ui: "/plugins/netbox-llm-chat/api/ui/",
+      history: "/plugins/netwaive/api/history/",
+      newSession: "/plugins/netwaive/api/sessions/new/",
+      selectSession: "/plugins/netwaive/api/sessions/select/",
+      deleteSession: "/plugins/netwaive/api/sessions/delete/",
+      clearSession: "/plugins/netwaive/api/history/clear/",
+      chat: "/plugins/netwaive/api/chat/",
+      health: "/plugins/netwaive/api/health/",
+      ui: "/plugins/netwaive/api/ui/",
     };
 
     function loadPos() {
@@ -82,7 +82,7 @@
 
     function syncDockWidth() {
       const width = Math.round(drawer.getBoundingClientRect().width || state.ui.width || 320);
-      document.body.style.setProperty("--netbox-llm-chat-docked-width", `${width}px`);
+      document.body.style.setProperty("--netwaive-docked-width", `${width}px`);
       state.ui.width = width;
     }
 
@@ -90,9 +90,9 @@
       state.layout = layout === "docked" ? "docked" : "floating";
       drawer.dataset.layout = state.layout;
       drawer.classList.toggle("docked", state.layout === "docked");
-      document.body.classList.toggle("netbox-llm-chat-docked", visible && state.layout === "docked");
+      document.body.classList.toggle("netwaive-docked", visible && state.layout === "docked");
       if (!(visible && state.layout === "docked")) {
-        document.body.style.removeProperty("--netbox-llm-chat-docked-width");
+        document.body.style.removeProperty("--netwaive-docked-width");
       }
       if (dockBtn) {
         dockBtn.textContent = state.layout === "docked" ? "↔" : "▥";
@@ -110,7 +110,7 @@
         drawer.style.boxShadow = "none";
         if (!drawer.hidden) syncDockWidth();
       } else {
-        document.body.style.removeProperty("--netbox-llm-chat-docked-width");
+        document.body.style.removeProperty("--netwaive-docked-width");
         drawer.style.right = "24px";
         drawer.style.bottom = "88px";
         drawer.style.left = "auto";
@@ -155,7 +155,7 @@
             html += "</code></pre>";
             codeBlock = false;
           } else {
-            html += "<pre class=\"netbox-llm-chat-code\"><code>";
+            html += "<pre class=\"netwaive-code\"><code>";
             codeBlock = true;
           }
           continue;
@@ -168,7 +168,7 @@
           const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(x => x.trim());
           if (cells.every(x => /^:?-{3,}:?$/.test(x))) continue;
           if (!table) {
-            html += "<table class=\"netbox-llm-chat-table\"><thead><tr>" + cells.map(x => `<th>${inline(x)}</th>`).join("") + "</tr></thead><tbody>";
+            html += "<table class=\"netwaive-table\"><thead><tr>" + cells.map(x => `<th>${inline(x)}</th>`).join("") + "</tr></thead><tbody>";
             table = true;
           } else {
             html += "<tr>" + cells.map(x => `<td>${inline(x)}</td>`).join("") + "</tr>";
@@ -178,11 +178,11 @@
 
         closeTable();
         const value = line.trim();
-        if (!value) { html += "<div class=\"netbox-llm-chat-spacer\"></div>"; continue; }
+        if (!value) { html += "<div class=\"netwaive-spacer\"></div>"; continue; }
         if (value.startsWith("### ")) html += `<h4>${inline(value.slice(4))}</h4>`;
         else if (value.startsWith("## ")) html += `<h3>${inline(value.slice(3))}</h3>`;
         else if (value.startsWith("# ")) html += `<h2>${inline(value.slice(2))}</h2>`;
-        else if (/^[-*] /.test(value)) html += `<div class=\"netbox-llm-chat-list-item\">• ${inline(value.slice(2))}</div>`;
+        else if (/^[-*] /.test(value)) html += `<div class=\"netwaive-list-item\">• ${inline(value.slice(2))}</div>`;
         else html += `<p>${inline(value)}</p>`;
       }
       closeTable();
@@ -192,7 +192,7 @@
 
     function addMessage(role, text) {
       const row = document.createElement("div");
-      row.className = `netbox-llm-chat-msg ${role}`;
+      row.className = `netwaive-msg ${role}`;
       const bubble = document.createElement("span");
       if (role === "assistant") {
         bubble.style.display = "block";
@@ -211,7 +211,7 @@
     function renderConversation() {
       messages.replaceChildren();
       const intro = document.createElement("div");
-      intro.className = "netbox-llm-chat-intro";
+      intro.className = "netwaive-intro";
       intro.textContent = "Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.";
       messages.appendChild(intro);
       state.history.forEach(item => addMessage(item.role, item.text));
@@ -219,10 +219,10 @@
     }
 
     function renderPendingControls() {
-      messages.querySelector("#netbox-llm-chat-confirm-wrap")?.remove();
+      messages.querySelector("#netwaive-confirm-wrap")?.remove();
       if (!state.pendingWrite) return;
       const wrap = document.createElement("div");
-      wrap.id = "netbox-llm-chat-confirm-wrap";
+      wrap.id = "netwaive-confirm-wrap";
       wrap.className = "d-flex gap-2 mt-2 justify-content-end";
       const yes = document.createElement("button");
       yes.type = "button";
@@ -232,12 +232,12 @@
       no.type = "button";
       no.className = "btn btn-sm btn-outline-danger";
       no.textContent = "Annuler";
-      const sendQuick = async (message) => {
+      const sendQuick = async (message, approvePending = false) => {
         addMessage("user", message);
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, conversation_id: state.activeSessionId }),
+          body: JSON.stringify({ message, conversation_id: state.activeSessionId, approve_pending: approvePending }),
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
@@ -253,7 +253,7 @@
       };
       yes.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
-        try { await sendQuick("oui"); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
+        try { await sendQuick("oui", true); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
       });
       no.addEventListener("click", async () => {
@@ -272,16 +272,16 @@
       state.sessions.forEach(session => {
         const tab = document.createElement("button");
         tab.type = "button";
-        tab.className = `netbox-llm-chat-tab${session.id === state.activeSessionId ? " active" : ""}`;
+        tab.className = `netwaive-tab${session.id === state.activeSessionId ? " active" : ""}`;
         tab.dataset.sessionId = session.id;
 
         const label = document.createElement("span");
-        label.className = "netbox-llm-chat-tab-label";
+        label.className = "netwaive-tab-label";
         label.textContent = session.title || "Session";
 
         const close = document.createElement("button");
         close.type = "button";
-        close.className = "netbox-llm-chat-tab-close";
+        close.className = "netwaive-tab-close";
         close.textContent = "×";
         close.title = "Supprimer cette session";
 
@@ -482,7 +482,7 @@
     fab?.addEventListener("click", () => {
       drawer.hidden = false;
       if (state.layout === "docked") {
-        document.body.classList.add("netbox-llm-chat-docked");
+        document.body.classList.add("netwaive-docked");
         syncDockWidth();
       }
       applyLayout(state.layout, true, true);

@@ -3,16 +3,16 @@ from types import SimpleNamespace
 
 from pydantic import SecretStr
 
-from netbox_llm_chat.agent import NetBoxAgent
-from netbox_llm_chat.config import Settings
-from netbox_llm_chat.models import (
+from netwaive.agent import NetBoxAgent
+from netwaive.config import Settings
+from netwaive.models import (
     GetEndpointSchemaArgs,
     NetBoxReadArgs,
     NetBoxWriteArgs,
     PendingToolCall,
     ToolResult,
 )
-from netbox_llm_chat.tools import NetBoxTools
+from netwaive.tools import NetBoxTools
 
 
 def settings():
@@ -251,19 +251,51 @@ def test_confirmation_matches_business_report_for_composed_request():
     assert message.endswith("Confirmez-vous l’exécution de ces opérations ?")
 
 
-def test_confirmation_language_adapts_to_english():
+def test_confirmation_is_forced_to_french():
     pending = [PendingToolCall(
         id="create-site",
         name="netbox_write",
         arguments={"app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "HomeLab", "slug": "homelab"}},
     )]
     message = NetBoxAgent._pending_message(pending, {}, "en")
-    assert message.startswith("Changes awaiting your approval")
-    assert "Create site: 'HomeLab'" in message
-    assert "dcim/sites" not in message
-    assert "Do you approve these operations?" in message
-    assert NetBoxAgent._detect_language("Create a site named HomeLab") == "en"
+    assert message.startswith("Modifications en attente de votre validation")
+    assert "Création du site : 'HomeLab'" in message
+    assert "Changes awaiting" not in message
+    assert "Create site" not in message
+    assert NetBoxAgent._detect_language("Create a site named HomeLab") == "fr"
     assert NetBoxAgent._detect_language("Crée un site nommé HomeLab") == "fr"
+
+
+def test_confirmation_uses_precise_netbox_resource_labels_and_clean_deletes():
+    pending = [
+        PendingToolCall(id="manufacturer", name="netbox_write", arguments={
+            "app": "dcim", "endpoint": "manufacturers", "action": "create", "data": {"name": "Juniper"},
+        }),
+        PendingToolCall(id="type", name="netbox_write", arguments={
+            "app": "dcim", "endpoint": "device-types", "action": "create", "data": {"model": "EX4300"},
+        }),
+        PendingToolCall(id="ip-delete", name="netbox_write", arguments={
+            "app": "ipam", "endpoint": "ip-addresses", "action": "delete", "data": {"id": 7, "address": "10.0.0.1/24"},
+        }),
+    ]
+    message = NetBoxAgent._pending_message(pending, {}, "fr")
+    assert "Création : Fabricant 'Juniper'" in message
+    assert "Création : Type d’équipement 'EX4300'" in message
+    assert "Suppression de l’adresse IP : '10.0.0.1/24'" in message
+    assert "Attribution d’IP" not in message
+    assert "nouvel objet" not in message
+    assert "élément vérifié" not in message
+
+
+def test_l3_interface_name_cannot_be_derived_from_an_ip():
+    args = {
+        "app": "dcim", "endpoint": "interfaces", "action": "create",
+        "data": {"name": "l3-10.50.0.1", "type": "virtual", "device": 1},
+    }
+    result = NetBoxAgent._write_guard(args, {("dcim", "interfaces")}, {1}, "fr")
+    assert result is not None
+    assert result.data["invalid_l3_interface_name"] is True
+    assert "Vlan71" in result.message
 
 
 def test_write_guard_requires_live_read_and_observed_update_id():

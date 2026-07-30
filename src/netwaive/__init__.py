@@ -1,21 +1,21 @@
-"""NetBox LLM Chat."""
+"""NetWAIve."""
 from .agent import NetBoxAgent, AgentResponse
 from .config import Settings
 from .tools import NetBoxTools
 
 __all__ = ["AgentResponse", "NetBoxAgent", "NetBoxTools", "Settings"]
-__version__ = "0.3.7"
+__version__ = "0.3.8"
 
 try:  # Chargé uniquement dans le venv NetBox.
     from netbox.plugins import PluginConfig
 
-    class NetBoxLLMChatConfig(PluginConfig):
-        name = "netbox_llm_chat"
-        verbose_name = "NetBox LLM Chat"
+    class NetWAIveConfig(PluginConfig):
+        name = "netwaive"
+        verbose_name = "NetWAIve"
         description = "Assistant LLM NetBox utilisant exclusivement pynetbox"
         version = __version__
         author = "NetDevOps"
-        base_url = "netbox-llm-chat"
+        base_url = "netwaive"
         min_version = "4.0.0"
         default_settings = {
             "write_enabled": False,
@@ -27,7 +27,7 @@ try:  # Chargé uniquement dans le venv NetBox.
             "llm_model": "",
         }
 
-    config = NetBoxLLMChatConfig
-    __all__.append("NetBoxLLMChatConfig")
+    config = NetWAIveConfig
+    __all__.append("NetWAIveConfig")
 except ModuleNotFoundError:
     config = None

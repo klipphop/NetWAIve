@@ -55,9 +55,13 @@ jobs:
 
           gh release edit v0.3.12 --repo "${GITHUB_REPOSITORY}" --latest
 
-      - name: Update repository description
+      - name: Update repository description when an administration token is available
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_REPO_ADMIN_TOKEN: ${{ secrets.GH_REPO_ADMIN_TOKEN }}
         run: |
-          gh api --method PATCH "repos/${GITHUB_REPOSITORY}" \
+          if [[ -z "${GH_REPO_ADMIN_TOKEN}" ]]; then
+            echo "GH_REPO_ADMIN_TOKEN is not configured; repository description update is skipped."
+            exit 0
+          fi
+          GH_TOKEN="${GH_REPO_ADMIN_TOKEN}" gh api --method PATCH "repos/${GITHUB_REPOSITORY}" \
             -f description='NetWAIve - AI-powered NetBox Assistant Plugin'

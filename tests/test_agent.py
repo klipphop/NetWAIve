@@ -153,6 +153,17 @@ def test_confirm_executes_exact_call_and_closes_without_replanning():
     assert client.calls == []
 
 
+def test_confirmation_success_summary_matches_the_user_language():
+    pending = [PendingToolCall(
+        id="call-1",
+        name="netbox_write",
+        arguments={"app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "HomeLab"}},
+    )]
+    result = NetBoxAgent(settings(), tools=FakeTools(), client=FakeClient([])).confirm("Create site HomeLab", pending)
+    assert "approved operation(s) were executed successfully" in result.message
+    assert "configuration is now in place" in result.message
+
+
 def test_composite_order_produces_one_global_confirmation():
     create = tool_call(
         "netbox_write",
@@ -269,19 +280,21 @@ def test_confirmation_matches_business_report_for_composed_request():
     assert message.endswith("Confirmez-vous l’exécution de ces opérations ?")
 
 
-def test_confirmation_is_forced_to_french():
+def test_confirmation_matches_the_user_language():
     pending = [PendingToolCall(
         id="create-site",
         name="netbox_write",
         arguments={"app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "HomeLab", "slug": "homelab"}},
     )]
-    message = NetBoxAgent._pending_message(pending, {}, "en")
-    assert message.startswith("Modifications en attente de votre validation")
-    assert "Création du site : 'HomeLab'" in message
-    assert "Changes awaiting" not in message
-    assert "Create site" not in message
-    assert NetBoxAgent._detect_language("Create a site named HomeLab") == "fr"
+    english = NetBoxAgent._pending_message(pending, {}, "en")
+    french = NetBoxAgent._pending_message(pending, {}, "fr")
+    assert english.startswith("Pending changes awaiting your validation")
+    assert "Create site: 'HomeLab'" in english
+    assert "Changes awaiting" not in french
+    assert "Création du site : 'HomeLab'" in french
+    assert NetBoxAgent._detect_language("Create a site named HomeLab") == "en"
     assert NetBoxAgent._detect_language("Crée un site nommé HomeLab") == "fr"
+    assert NetBoxAgent._detect_language("LAB-01") == "fr"
 
 
 def test_confirmation_uses_precise_netbox_resource_labels_and_clean_deletes():

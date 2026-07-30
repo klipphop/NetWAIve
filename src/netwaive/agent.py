@@ -29,8 +29,13 @@ class NetBoxAgent:
 
     @staticmethod
     def _detect_language(user_message: str) -> str:
-        """NetWAIve est volontairement francophone côté interface et confirmations."""
-        return "fr"
+        text = user_message.lower()
+        if re.search(r"[àâçéèêëîïôùûüÿœ]", text):
+            return "fr"
+        words = set(re.findall(r"[a-z']+", text))
+        french = {"le", "la", "les", "un", "une", "des", "sur", "avec", "crée", "créer", "ajoute", "attache", "dans", "pour", "merci"}
+        english = {"the", "a", "an", "on", "with", "create", "add", "attach", "in", "for", "please", "delete", "update"}
+        return "en" if len(words & english) > len(words & french) else "fr"
 
     @staticmethod
     def _is_explicit_write_request(message: str) -> bool:
@@ -118,26 +123,27 @@ class NetBoxAgent:
         return str(value)
 
     @staticmethod
-    def _resource_label(endpoint: str, data: dict[str, Any] | None = None) -> str:
+    def _resource_label(endpoint: str, data: dict[str, Any] | None = None, language: str = "fr") -> str:
         labels = {
-            "manufacturers": "Fabricant",
-            "device-types": "Type d’équipement",
-            "devices": "Équipement",
-            "sites": "Site",
-            "ip-addresses": "Adresse IP",
-            "prefixes": "Préfixe",
-            "vlans": "VLAN",
-            "interfaces": "Interface",
-            "cables": "Câble",
-            "vlan-groups": "Groupe de VLANs",
-            "custom-fields": "Champ personnalisé",
-            "platforms": "Plateforme",
-            "device-roles": "Rôle d’équipement",
+            "manufacturers": ("Fabricant", "Manufacturer"),
+            "device-types": ("Type d’équipement", "Device Type"),
+            "devices": ("Équipement", "Device"),
+            "sites": ("Site", "Site"),
+            "ip-addresses": ("Adresse IP", "IP Address"),
+            "prefixes": ("Préfixe", "Prefix"),
+            "vlans": ("VLAN", "VLAN"),
+            "interfaces": ("Interface", "Interface"),
+            "cables": ("Câble", "Cable"),
+            "vlan-groups": ("Groupe de VLANs", "VLAN Group"),
+            "custom-fields": ("Champ personnalisé", "Custom Field"),
+            "platforms": ("Plateforme", "Platform"),
+            "device-roles": ("Rôle d’équipement", "Device Role"),
         }
         normalized = str(endpoint or "").replace("_", "-").lower()
         if normalized == "interfaces" and str((data or {}).get("type") or "").lower() == "lag":
             return "LAG"
-        return labels.get(normalized, "Objet NetBox")
+        pair = labels.get(normalized, ("Objet NetBox", "NetBox Object"))
+        return pair[1] if language == "en" else pair[0]
 
     @classmethod
     def _planned_business_labels(
@@ -228,15 +234,16 @@ class NetBoxAgent:
         labels = cls._collect_id_labels(outputs)
         planned_labels = cls._planned_business_labels(pending, labels)
         planned_relations = cls._planned_relation_labels(pending)
-        lines = ["Modifications en attente de votre validation :"]
+        english = language == "en"
+        lines = ["Pending changes awaiting your validation:" if english else "Modifications en attente de votre validation :"]
 
         for call in pending:
             args = call.arguments
             data = dict(args.get("data")) if isinstance(args.get("data"), dict) else {}
             endpoint = str(args.get("endpoint") or "").replace("_", "-").lower()
             action = str(args.get("action") or "create").lower()
-            resource = cls._resource_label(endpoint, data)
-            relation = cls._relation_suffix(data, labels, planned_labels, planned_relations, language="fr")
+            resource = cls._resource_label(endpoint, data, language)
+            relation = cls._relation_suffix(data, labels, planned_labels, planned_relations, language=language)
             name = cls._business_value(data.get("name") or data.get("model"), labels, planned_labels)
             target = cls._business_value(data.get("id"), labels, planned_labels)
             display = target or name or planned_labels.get(call.id, resource)
@@ -244,63 +251,66 @@ class NetBoxAgent:
             if action == "delete":
                 if endpoint == "ip-addresses":
                     address = cls._business_value(data.get("address"), labels, planned_labels) or display
-                    line = f"• Suppression de l’adresse IP : '{address}'"
+                    line = f"• Delete IP address: '{address}'" if english else f"• Suppression de l’adresse IP : '{address}'"
                 else:
-                    line = f"• Suppression : {resource} '{display}'"
+                    line = f"• Delete: {resource} '{display}'" if english else f"• Suppression : {resource} '{display}'"
             elif endpoint == "sites" and action == "create":
-                line = f"• Création du site : '{name or resource}'"
+                line = f"• Create site: '{name or resource}'" if english else f"• Création du site : '{name or resource}'"
             elif endpoint == "devices" and action == "create":
-                if re.match(r"(?i)^(srv|server)", name or ""):
+                if english:
+                    noun = "server" if re.match(r"(?i)^(srv|server)", name or "") else "device"
+                    line = f"• Create {noun}: '{name or resource}'{relation}"
+                elif re.match(r"(?i)^(srv|server)", name or ""):
                     line = f"• Création du serveur : '{name}'{relation}"
                 else:
                     line = f"• Création de l’équipement : '{name or resource}'{relation}"
             elif endpoint == "interfaces" and action == "create" and str(data.get("type") or "").lower() == "lag":
-                line = f"• Création du LAG : '{name or resource}'{relation}"
+                line = f"• Create LAG: '{name or resource}'{relation}" if english else f"• Création du LAG : '{name or resource}'{relation}"
             elif endpoint == "vlans" and action == "create":
                 vid = data.get("vid")
-                line = f"• Création du VLAN : VID {vid} — Nom '{name or resource}'{relation}"
+                line = f"• Create VLAN: VID {vid} — Name '{name or resource}'{relation}" if english else f"• Création du VLAN : VID {vid} — Nom '{name or resource}'{relation}"
             elif endpoint == "prefixes" and action == "create":
                 prefix = cls._business_value(data.get("prefix"), labels, planned_labels) or resource
-                line = f"• Création du préfixe : {prefix}{relation}"
+                line = f"• Create prefix: {prefix}{relation}" if english else f"• Création du préfixe : {prefix}{relation}"
                 if data.get("is_pool") is True:
-                    line += " — Utilisé comme pool d’adresses"
+                    line += " — Used as an address pool" if english else " — Utilisé comme pool d’adresses"
             elif endpoint == "ip-addresses":
                 address = cls._business_value(data.get("address"), labels, planned_labels)
-                destination = cls._business_value(
-                    data.get("device") or data.get("assigned_object_id") or data.get("interface"),
-                    labels,
-                    planned_labels,
-                )
+                destination = cls._business_value(data.get("device") or data.get("assigned_object_id") or data.get("interface"), labels, planned_labels)
                 if destination == "__planned_reference__":
-                    destination = planned_relations.get("device", "la cible prévue")
-                source_prefix = planned_relations.get("prefix") or next((value for value in planned_labels.values() if "/" in value), "le préfixe prévu")
-                if not address or address == "__planned_reference__" or address == "Adresse IP":
-                    line = f"• Attribution d’IP : La première IP disponible dans {source_prefix} sera attribuée"
+                    destination = planned_relations.get("device", "the planned target" if english else "la cible prévue")
+                source_prefix = planned_relations.get("prefix") or next((value for value in planned_labels.values() if "/" in value), "the planned prefix" if english else "le préfixe prévu")
+                if not address or address == "__planned_reference__" or address == ("IP Address" if english else "Adresse IP"):
+                    line = (
+                        f"• IP assignment: The first available IP in {source_prefix} will be assigned"
+                        if english
+                        else f"• Attribution d’IP : La première IP disponible dans {source_prefix} sera attribuée"
+                    )
                 else:
-                    line = f"• Attribution d’IP : L’adresse {address} sera attribuée"
+                    line = f"• IP assignment: {address} will be assigned" if english else f"• Attribution d’IP : L’adresse {address} sera attribuée"
                 if destination:
-                    line += f" à {destination}"
-                line += " dès validation."
+                    line += f" to {destination}" if english else f" à {destination}"
+                line += " upon validation." if english else " dès validation."
             elif endpoint == "interfaces" and action == "update" and "lag" in data:
-                interface = target or name or "Interface"
+                interface = target or name or ("Interface" if english else "Interface")
                 lag = cls._business_value(data.get("lag"), labels, planned_labels)
                 if lag == "__planned_reference__":
                     lag = planned_relations.get("lag", "LAG")
-                line = f"• Rattachement de l’interface '{interface}' au LAG '{lag}'"
+                line = f"• Attach interface '{interface}' to LAG '{lag}'" if english else f"• Rattachement de l’interface '{interface}' au LAG '{lag}'"
             elif endpoint == "prefixes" and action == "update" and "vlan" in data:
-                prefix = target or cls._business_value(data.get("prefix"), labels, planned_labels) or "Préfixe"
+                prefix = target or cls._business_value(data.get("prefix"), labels, planned_labels) or ("Prefix" if english else "Préfixe")
                 vlan = cls._business_value(data.get("vlan"), labels, planned_labels)
                 if vlan == "__planned_reference__":
                     vlan = planned_relations.get("vlan", "VLAN")
-                line = f"• Rattachement du préfixe {prefix} au VLAN '{vlan}'{relation}"
+                line = f"• Attach prefix {prefix} to VLAN '{vlan}'{relation}" if english else f"• Rattachement du préfixe {prefix} au VLAN '{vlan}'{relation}"
             elif action == "update":
-                line = f"• Mise à jour : {resource} '{display}'{relation}"
+                line = f"• Update: {resource} '{display}'{relation}" if english else f"• Mise à jour : {resource} '{display}'{relation}"
             else:
-                line = f"• Création : {resource} '{display}'{relation}"
+                line = f"• Create: {resource} '{display}'{relation}" if english else f"• Création : {resource} '{display}'{relation}"
             lines.append(line)
 
-        lines.append("\nConfirmez-vous l’exécution de ces opérations ?")
-        return "\n".join(lines).replace("__planned_reference__", "Objet NetBox")
+        lines.append("\nDo you approve these operations?" if english else "\nConfirmez-vous l’exécution de ces opérations ?")
+        return "\n".join(lines).replace("__planned_reference__", "NetBox object" if english else "Objet NetBox")
 
     @staticmethod
     def _target_key(arguments: dict[str, Any]) -> tuple[str, str]:
@@ -351,10 +361,15 @@ class NetBoxAgent:
                     requested = data.get(field)
                     observed = record.get(field)
                     if requested not in (None, "") and observed not in (None, "") and str(requested).casefold() == str(observed).casefold():
-                        resource = cls._resource_label(target[1], data)
+                        resource = cls._resource_label(target[1], data, language)
+                        message = (
+                            f"{resource} already exists in NetBox: no additional creation is required."
+                            if language == "en"
+                            else f"{resource} déjà présent dans NetBox : aucune création supplémentaire n’est nécessaire."
+                        )
                         return ToolResult(
                             ok=False,
-                            message=f"{resource} déjà présent dans NetBox : aucune création supplémentaire n’est nécessaire.",
+                            message=message,
                             data={"existing_object": True, "resource": resource},
                         )
         if target == ("dcim", "interfaces") and action == "create":
@@ -587,15 +602,18 @@ class NetBoxAgent:
             if not result.ok:
                 break
 
+        language = self._detect_language(user_message)
         if results and all(result.ok for result in results) and len(results) == len(pending):
             message = (
-                f"Les {len(results)} opération(s) validée(s) ont été exécutées avec succès. "
-                "La configuration demandée est maintenant en place."
+                f"{len(results)} approved operation(s) were executed successfully. The requested configuration is now in place."
+                if language == "en"
+                else f"Les {len(results)} opération(s) validée(s) ont été exécutées avec succès. La configuration demandée est maintenant en place."
             )
         else:
             completed = sum(1 for result in results if result.ok)
             message = (
-                f"Exécution interrompue : {completed} opération(s) sur {len(pending)} ont réussi. "
-                "Aucune opération restante n’a été relancée automatiquement."
+                f"Execution stopped: {completed} operation(s) out of {len(pending)} succeeded. No remaining operation was retried automatically."
+                if language == "en"
+                else f"Exécution interrompue : {completed} opération(s) sur {len(pending)} ont réussi. Aucune opération restante n’a été relancée automatiquement."
             )
         return AgentResponse(message=message, tool_results=results)

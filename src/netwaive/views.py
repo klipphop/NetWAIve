@@ -100,7 +100,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 
 @login_required
 def chat(request):
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.10"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.11"})
 
 
 @login_required
@@ -143,17 +143,18 @@ def chat_api(request):
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
     agent = NetBoxAgent(_agent_settings())
     normalized = message.lower().strip()
+    language = NetBoxAgent._detect_language(message)
     approved = bool(body.get("approve_pending"))
     execution_status = "none"
 
     if pending and normalized in {"non", "n", "annule", "annuler"}:
         active["pending_write"] = None
         execution_status = "cancelled"
-        answer = "Action annulée. Aucune écriture NetBox n’a été exécutée."
+        answer = "Action cancelled. No NetBox write was executed." if language == "en" else "Action annulée. Aucune écriture NetBox n’a été exécutée."
     elif pending and (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide"}):
         if not _can_write(request.user):
             active["pending_write"] = None
-            answer = "Écriture non autorisée pour ce compte NetBox."
+            answer = "Writes are not authorized for this NetBox account." if language == "en" else "Écriture non autorisée pour ce compte NetBox."
         else:
             calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
             pending_history = pending.get("history") if isinstance(pending.get("history"), list) else active.get("history", [])
@@ -174,7 +175,7 @@ def chat_api(request):
         answer = result.message
         if result.pending_confirmation:
             if not _can_write(request.user):
-                answer = "Cette demande nécessite une écriture, mais ce compte n’est pas autorisé."
+                answer = "This request requires a write, but this account is not authorized." if language == "en" else "Cette demande nécessite une écriture, mais ce compte n’est pas autorisé."
                 active["pending_write"] = None
             else:
                 active["pending_write"] = {

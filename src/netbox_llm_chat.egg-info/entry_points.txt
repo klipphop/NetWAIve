@@ -1,2 +1,0 @@
-[console_scripts]
-netbox-llm-chat = netbox_llm_chat.cli:main

@@ -33,6 +33,14 @@ class NetBoxAgent:
         return "fr"
 
     @staticmethod
+    def _is_explicit_write_request(message: str) -> bool:
+        return bool(re.search(
+            r"\b(crée|créer|cree|create|ajoute|ajouter|supprime|supprimer|modifie|modifier|met à jour|update|delete|rattache|attache|affecte)\b",
+            message,
+            re.IGNORECASE,
+        ))
+
+    @staticmethod
     def _messages(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for item in (history or [])[-16:]:
@@ -431,6 +439,7 @@ class NetBoxAgent:
         results: list[ToolResult] | None = None,
         planned: list[PendingToolCall] | None = None,
         language: str = "fr",
+        require_live_plan: bool = False,
     ) -> AgentResponse:
         collected = list(results or [])
         write_plan = list(planned or [])
@@ -440,6 +449,7 @@ class NetBoxAgent:
         observed_records: dict[tuple[str, str], list[dict[str, Any]]] = {}
         signatures = {self._call_signature(call) for call in write_plan}
         missing_recovery_used = False
+        plan_repair_used = False
 
         for _ in range(self.settings.max_agent_turns):
             response = self.client.chat.completions.create(
@@ -452,6 +462,19 @@ class NetBoxAgent:
             calls = list(assistant.tool_calls or [])
             if not calls:
                 content = assistant.content or ""
+                false_confirmation = bool(re.search(r"modifications? en attente|confirmez-vous|confirmation", content, re.IGNORECASE))
+                if require_live_plan and not write_plan and not plan_repair_used and (not collected or false_confirmation):
+                    messages.append(assistant.model_dump(exclude_none=True))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Demande de mutation détectée : ne produis pas une confirmation en prose sans plan réel. "
+                            "Exécute d’abord les netbox_read nécessaires. Si les objets existent déjà, réponds qu’ils sont tous en place ; "
+                            "sinon prépare les netbox_write et laisse le runtime rendre la confirmation."
+                        ),
+                    })
+                    plan_repair_used = True
+                    continue
                 last_failure = next((item for item in reversed(collected) if not item.ok), None)
                 missing_dependency = bool(
                     last_failure
@@ -539,6 +562,7 @@ class NetBoxAgent:
             self._messages(user_message, history),
             confirm_write=confirm_write,
             language=self._detect_language(user_message),
+            require_live_plan=self._is_explicit_write_request(user_message),
         )
 
     def confirm(

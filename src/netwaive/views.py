@@ -100,7 +100,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 
 @login_required
 def chat(request):
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.9"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.10"})
 
 
 @login_required

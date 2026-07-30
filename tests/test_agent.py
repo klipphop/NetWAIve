@@ -107,6 +107,21 @@ def test_theoretical_answer_without_tool():
     assert result.pending_confirmation == []
 
 
+def test_write_request_cannot_return_a_prose_confirmation_without_live_plan():
+    read = tool_call("netbox_read", {
+        "app": "dcim", "endpoint": "sites", "method": "filter", "kwargs": {"name": "LAB-PARIS-01"}
+    }, "read-site")
+    client = FakeClient([
+        Message("Modifications en attente de votre validation : Confirmez-vous ?"),
+        Message(tool_calls=[read]),
+        Message("Le site et les VLANs existent déjà, tout est en place !"),
+    ])
+    result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Crée le site LAB-PARIS-01")
+    assert result.pending_confirmation == []
+    assert result.message == "Le site et les VLANs existent déjà, tout est en place !"
+    assert len(client.calls) == 3
+
+
 def test_universal_write_requires_confirmation():
     call = tool_call("netbox_write", {
         "app": "dcim", "endpoint": "devices", "action": "create", "data": {"name": "sw-02"}
@@ -346,7 +361,10 @@ def test_available_ips_uses_native_prefix_endpoint():
 
 
 def test_recent_context_is_injected_into_agent_messages():
-    client = FakeClient([Message("Je rattache les interfaces déjà citées.")])
+    client = FakeClient([
+        Message("Je rattache les interfaces déjà citées."),
+        Message("Les interfaces citées doivent être vérifiées avant toute action."),
+    ])
     history = [
         {"role": "assistant", "text": "Il reste à rattacher 1/1/21 à 1/1/24 au LAG po1."},
     ]

@@ -1,0 +1,8 @@
+pynetbox<8,>=7.4
+openai<2,>=1.40
+pydantic<3,>=2.8
+pydantic-settings<3,>=2.4
+
+[dev]
+pytest>=8
+build>=1.2

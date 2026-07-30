@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netbox-llm-chat"
+version = "0.3.7"
+description = "Assistant LLM NetBox avec tools pynetbox typés"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "NetDevOps"}]
+dependencies = [
+  "pynetbox>=7.4,<8",
+  "openai>=1.40,<2",
+  "pydantic>=2.8,<3",
+  "pydantic-settings>=2.4,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "build>=1.2"]
+
+[project.scripts]
+netbox-llm-chat = "netbox_llm_chat.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+netbox_llm_chat = ["templates/**/*.html", "static/**/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"

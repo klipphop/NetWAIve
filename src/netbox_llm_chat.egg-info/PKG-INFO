@@ -1,3 +1,19 @@
+Metadata-Version: 2.4
+Name: netbox-llm-chat
+Version: 0.3.7
+Summary: Assistant LLM NetBox avec tools pynetbox typés
+Author: NetDevOps
+License-Expression: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: pynetbox<8,>=7.4
+Requires-Dist: openai<2,>=1.40
+Requires-Dist: pydantic<3,>=2.8
+Requires-Dist: pydantic-settings<3,>=2.4
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: build>=1.2; extra == "dev"
+
 # NetBox LLM Chat
 
 Package Python autonome fournissant un agent LLM à double casquette : expert IT/réseau et opérateur NetBox RO/RW. Toutes les opérations NetBox utilisent exclusivement `pynetbox`.

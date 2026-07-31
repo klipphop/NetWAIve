@@ -109,7 +109,7 @@ def test_symbolic_reference_resolves_call_aliases_and_result_ids():
     outputs = {"toolu_abc": {"ok": True, "data": {"id": 12}}}
     assert NetBoxAgent._resolve_reference("toolu_abc.data.id", outputs) == 12
     assert NetBoxAgent._resolve_reference("toolu_abc.id", outputs) == 12
-    assert NetBoxAgent._resolve_reference("call_1.data.id", outputs) == 12
+    assert NetBoxAgent._resolve_reference("call_o1hFJh1F074DRdjM1l4v8ACm.data.id", outputs) == 12
 
 
 def test_parent_dependencies_are_ordered_before_device_creation():

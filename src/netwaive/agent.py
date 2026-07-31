@@ -258,6 +258,16 @@ class NetBoxAgent:
         planned_relations = cls._planned_relation_labels(pending)
         english = language == "en"
         lines = ["Pending changes awaiting your validation:" if english else "Modifications en attente de votre validation :"]
+        reused: set[str] = set()
+        for call in pending:
+            data = call.arguments.get("data") if isinstance(call.arguments.get("data"), dict) else {}
+            for key in ("manufacturer", "device_type", "role", "site", "vlan"):
+                value = data.get(key)
+                if isinstance(value, int) and len(labels.get(value, set())) == 1:
+                    reused.add(next(iter(labels[value])))
+        if reused:
+            prefix = "• Reused existing NetBox object: " if english else "• Objet NetBox existant réutilisé : "
+            lines.extend(prefix + item for item in sorted(reused))
 
         for call in pending:
             args = call.arguments
@@ -439,6 +449,10 @@ class NetBoxAgent:
                 keys = list(outputs)
                 if 0 <= index < len(keys):
                     key = keys[index]
+        if key not in outputs and key.startswith("call_") and outputs:
+            # Some providers regenerate opaque call IDs between planning and execution.
+            # The dependency ordering guarantees the immediately preceding successful output is the parent.
+            key = next(reversed(outputs))
         if key not in outputs:
             raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
         current: Any = outputs[key]
@@ -664,7 +678,10 @@ class NetBoxAgent:
             rendered = json.dumps(call.arguments, ensure_ascii=False)
             if "${" in rendered:
                 refs = cls._reference_dependencies(call.arguments)
-                if not refs or refs - call_ids:
+                unknown = refs - call_ids
+                # Opaque call_* IDs may be emitted by providers before their final call IDs are materialized.
+                # Let the universal runtime resolver handle them; reject only malformed/non-tool variables here.
+                if not refs or any(not ref.startswith("call_") for ref in unknown):
                     errors.append(f"La référence de l’étape « {call.id} » est invalide ou inconnue.")
         return cls._order_pending(unique), errors
 

@@ -518,6 +518,7 @@ class NetBoxAgent:
         observed_records: dict[tuple[str, str], list[dict[str, Any]]] = {}
         signatures = {self._call_signature(call) for call in write_plan}
         missing_recovery_used = False
+        plan_completion_repair_used = False
         plan_repair_attempts = 0
 
         for _ in range(self.settings.max_agent_turns):

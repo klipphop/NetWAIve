@@ -517,25 +517,33 @@ class NetBoxAgent:
             for call, arguments in parsed:
                 if call.function.name in self.tools.MUTATING_TOOLS and not confirm_write:
                     arguments = self._resolve_available_references(arguments, tool_outputs)
-                    preflight = None
-                    validator = getattr(self.tools, "validate_write_payload", None)
-                    if callable(validator):
-                        preflight = validator(arguments)
-                    if preflight is not None and not preflight.ok:
-                        result = preflight
+                    collision = None
+                    collision_checker = getattr(self.tools, "preflight_termination_collisions", None)
+                    if callable(collision_checker):
+                        collision = collision_checker(arguments)
+                    if collision is not None and not collision.ok:
+                        result = collision
                         collected.append(result)
                     else:
-                        guard = self._write_guard(arguments, read_targets, observed_ids, language, observed_records)
-                        if guard is not None:
-                            result = guard
+                        preflight = None
+                        validator = getattr(self.tools, "validate_write_payload", None)
+                        if callable(validator):
+                            preflight = validator(arguments)
+                        if preflight is not None and not preflight.ok:
+                            result = preflight
                             collected.append(result)
                         else:
-                            pending_call = PendingToolCall(id=call.id, name=call.function.name, arguments=arguments)
-                            signature = self._call_signature(pending_call)
-                            if signature not in signatures:
-                                write_plan.append(pending_call)
-                                signatures.add(signature)
-                            result = self._planned_result(pending_call)
+                            guard = self._write_guard(arguments, read_targets, observed_ids, language, observed_records)
+                            if guard is not None:
+                                result = guard
+                                collected.append(result)
+                            else:
+                                pending_call = PendingToolCall(id=call.id, name=call.function.name, arguments=arguments)
+                                signature = self._call_signature(pending_call)
+                                if signature not in signatures:
+                                    write_plan.append(pending_call)
+                                    signatures.add(signature)
+                                result = self._planned_result(pending_call)
                 else:
                     result = self.tools.execute(call.function.name, arguments)
                     collected.append(result)

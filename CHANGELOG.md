@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.27] - 2026-07-30
+
+### Fixed
+- Added live termination-occupancy preflight for generic `*_terminations` relations.
+- Rendered duplicate-termination API conflicts as an actionable occupied-interface message.
+- Preserved user-provided labels as direct payload values.
+
 ## [0.3.26] - 2026-07-30
 
 ### Changed

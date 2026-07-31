@@ -68,8 +68,11 @@ class NetBoxTools:
 
     @staticmethod
     def _friendly_error(detail: Any) -> str:
-        """Return the native NetBox API error payload without resource-specific rewriting."""
-        return str(detail)
+        raw = str(detail)
+        match = re.search(r"Duplicate termination found for\s+(.+)", raw, re.IGNORECASE)
+        if match:
+            return f"Cette terminaison est déjà câblée : {match.group(1).strip()}. Choisis une autre interface ou déconnecte le câble existant."
+        return raw
 
     def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         model = self.ARG_MODELS.get(name)
@@ -234,6 +237,37 @@ class NetBoxTools:
             return None
         record = self._safe(records[0])
         return ToolResult(ok=True, message="Objet existant réutilisé.", data=record)
+
+    def preflight_termination_collisions(self, arguments: dict[str, Any]) -> ToolResult | None:
+        """Inspect every `*_terminations` relation and reject occupied live endpoints."""
+        data = arguments.get("data") if isinstance(arguments.get("data"), dict) else {}
+        terms: list[dict[str, Any]] = []
+        for key, value in data.items():
+            if not key.endswith("terminations"):
+                continue
+            values = value if isinstance(value, list) else [value]
+            terms.extend(item for item in values if isinstance(item, dict))
+        for term in terms:
+            object_type = str(term.get("object_type") or "")
+            object_id = term.get("object_id") or term.get("id")
+            if not object_type or not isinstance(object_id, int):
+                continue
+            app, _, resource = object_type.partition(".")
+            candidates = self._openapi_collections(app)
+            target = next((item["endpoint"] for item in candidates if self._normalize(item["endpoint"]) in {self._normalize(resource), self._normalize(resource + "s")}), None)
+            if not target:
+                continue
+            endpoint, _, _, _ = self._resolve_endpoint(app, target)
+            record = endpoint.get(object_id)
+            serialized = self._safe(record) if record else {}
+            cable = serialized.get("cable") if isinstance(serialized, dict) else None
+            if cable not in (None, "", {}):
+                device = serialized.get("device") if isinstance(serialized, dict) else None
+                device_name = device.get("name") if isinstance(device, dict) else str(device or "équipement inconnu")
+                term_name = serialized.get("name") if isinstance(serialized, dict) else str(object_id)
+                cable_id = cable.get("id") if isinstance(cable, dict) else cable
+                return ToolResult(ok=False, message=f"L’interface {term_name} sur l’équipement {device_name} est déjà câblée (Câble #{cable_id}). Veuillez choisir une autre interface ou déconnecter l’existante.", data={"occupied_termination": serialized, "cable": cable})
+        return None
 
     def validate_write_payload(self, arguments: dict[str, Any]) -> ToolResult | None:
         """Generic OpenAPI-driven preflight for required fields and enum choices."""

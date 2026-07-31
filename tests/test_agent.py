@@ -169,6 +169,24 @@ def test_openapi_preflight_returns_missing_fields_and_enum_choices():
     assert result.data["missing_fields"][1]["choices"] == ["cat6a", "fiber-os2"]
 
 
+def test_duplicate_termination_error_is_actionable():
+    message = NetBoxTools._friendly_error("Duplicate termination found for dcim.interface 42")
+    assert "déjà câblée" in message
+    assert "dcim.interface 42" in message
+
+
+def test_preflight_collision_stops_a_pending_write():
+    class CollisionTools(FakeTools):
+        def preflight_termination_collisions(self, arguments):
+            return ToolResult(ok=False, message="L’interface xe-0/0/1 sur l’équipement SW-01 est déjà câblée (Câble #12). Veuillez choisir une autre interface ou déconnecter l’existante.")
+    read = tool_call("netbox_read", {"app":"dcim","endpoint":"cables","method":"filter","kwargs":{}}, "read-cables")
+    write = tool_call("netbox_write", {"app":"dcim","endpoint":"cables","action":"create","data":{"label":"ID001"}}, "create-cable")
+    agent = NetBoxAgent(settings(), tools=CollisionTools(), client=FakeClient([Message(tool_calls=[read]), Message(tool_calls=[write]), Message("Conflit détecté.")]))
+    result = agent.run("Crée le câble ID001")
+    assert result.pending_confirmation == []
+    assert any("déjà câblée" in item.message for item in result.tool_results)
+
+
 def test_only_three_universal_tools_are_exposed():
     assert set(FakeTools.ARG_MODELS) == {"netbox_read", "netbox_write", "get_endpoint_schema"}
 

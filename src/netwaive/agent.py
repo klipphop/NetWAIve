@@ -578,6 +578,18 @@ class NetBoxAgent:
                     missing_recovery_used = True
                     continue
                 if write_plan:
+                    if require_live_plan and not plan_completion_repair_used:
+                        messages.append(assistant.model_dump(exclude_none=True))
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "Audit interne obligatoire : le plan courant contient des écritures mais doit couvrir l’objectif final initial. "
+                                "Continue maintenant les netbox_read et netbox_write nécessaires pour inclure chaque dépendance manquante et l’objet final. "
+                                "Ne retourne aucun texte utilisateur avant le plan complet ; le runtime affichera la carte après ce tour."
+                            ),
+                        })
+                        plan_completion_repair_used = True
+                        continue
                     write_plan, sanitation_errors = self._sanitize_plan(write_plan)
                     if sanitation_errors:
                         return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)

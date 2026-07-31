@@ -100,7 +100,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 
 @login_required
 def chat(request):
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.24"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.25"})
 
 
 @login_required
@@ -145,6 +145,7 @@ def chat_api(request):
     normalized = message.lower().strip()
     language = NetBoxAgent._detect_language(message)
     approved = bool(body.get("approve_pending"))
+    approval_scope = str(body.get("approval_scope") or "once")
     execution_status = "none"
 
     if pending and not (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide", "non", "n", "annule", "annuler"}):
@@ -160,6 +161,10 @@ def chat_api(request):
             active["pending_write"] = None
             answer = "Writes are not authorized for this NetBox account." if language == "en" else "Écriture non autorisée pour ce compte NetBox."
         else:
+            if approval_scope == "session":
+                active["allow_session"] = True
+            else:
+                active.pop("allow_session", None)
             calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
             pending_history = pending.get("history") if isinstance(pending.get("history"), list) else active.get("history", [])
             result = agent.confirm(str(pending.get("message") or ""), calls, history=pending_history)
@@ -178,7 +183,12 @@ def chat_api(request):
         result = agent.run(message, history=recent_history)
         answer = result.message
         if result.pending_confirmation:
-            if not _can_write(request.user):
+            if active.get("allow_session") and _can_write(request.user):
+                executed = agent.confirm(message, result.pending_confirmation, history=recent_history)
+                answer = executed.message
+                execution_status = "success" if len(executed.tool_results) == len(result.pending_confirmation) and all(item.ok for item in executed.tool_results) else "failed"
+                active["pending_write"] = None
+            elif not _can_write(request.user):
                 answer = "This request requires a write, but this account is not authorized." if language == "en" else "Cette demande nécessite une écriture, mais ce compte n’est pas autorisé."
                 active["pending_write"] = None
             else:

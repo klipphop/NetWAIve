@@ -227,17 +227,21 @@
       const yes = document.createElement("button");
       yes.type = "button";
       yes.className = "btn btn-sm btn-success";
-      yes.textContent = "Confirmer";
+      yes.textContent = "Allow Once";
+      const allowSession = document.createElement("button");
+      allowSession.type = "button";
+      allowSession.className = "btn btn-sm btn-outline-success";
+      allowSession.textContent = "Allow Session";
       const no = document.createElement("button");
       no.type = "button";
       no.className = "btn btn-sm btn-outline-danger";
-      no.textContent = "Annuler";
-      const sendQuick = async (message, approvePending = false) => {
+      no.textContent = "Deny";
+      const sendQuick = async (message, approvePending = false, approvalScope = "once") => {
         addMessage("user", message);
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, conversation_id: state.activeSessionId, approve_pending: approvePending }),
+          body: JSON.stringify({ message, conversation_id: state.activeSessionId, approve_pending: approvePending, approval_scope: approvalScope }),
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
@@ -256,12 +260,18 @@
         try { await sendQuick("oui", true); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
       });
+      allowSession.addEventListener("click", async () => {
+        yes.disabled = true; allowSession.disabled = true; no.disabled = true;
+        try { await sendQuick("allow session", true, "session"); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
+        finally { yes.disabled = false; allowSession.disabled = false; no.disabled = false; }
+      });
       no.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
         try { await sendQuick("non"); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
       });
       wrap.appendChild(yes);
+      wrap.appendChild(allowSession);
       wrap.appendChild(no);
       messages.appendChild(wrap);
       messages.scrollTop = messages.scrollHeight;

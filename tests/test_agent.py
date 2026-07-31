@@ -136,6 +136,26 @@ def test_partial_failure_retains_unexecuted_calls_for_completion():
     assert "finalisées" in result.message
 
 
+def test_end_to_end_site_and_device_are_one_pending_plan_without_transition():
+    read_site = tool_call("netbox_read", {"app":"dcim","endpoint":"sites","method":"filter","kwargs":{"name":"DC-PARIS-01"}}, "read-site")
+    create_site = tool_call("netbox_write", {"app":"dcim","endpoint":"sites","action":"create","data":{"name":"DC-PARIS-01"}}, "create-site")
+    read_device = tool_call("netbox_read", {"app":"dcim","endpoint":"devices","method":"filter","kwargs":{"name":"SW-TEST-99"}}, "read-device")
+    create_device = tool_call("netbox_write", {"app":"dcim","endpoint":"devices","action":"create","data":{"name":"SW-TEST-99","site":"${create-site.data.id}"}}, "create-device")
+    client = FakeClient([
+        Message(tool_calls=[read_site]),
+        Message(tool_calls=[create_site]),
+        Message("Je vérifie le prérequis."),
+        Message(tool_calls=[read_device]),
+        Message(tool_calls=[create_device]),
+        Message("Plan complet."),
+    ])
+    result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Crée le switch SW-TEST-99 dans le site DC-PARIS-01")
+    assert [call.id for call in result.pending_confirmation] == ["create-site", "create-device"]
+    assert "DC-PARIS-01" in result.message and "SW-TEST-99" in result.message
+    assert "Je vérifie" not in result.message
+    assert len(client.calls) == 6
+
+
 def test_only_three_universal_tools_are_exposed():
     assert set(FakeTools.ARG_MODELS) == {"netbox_read", "netbox_write", "get_endpoint_schema"}
 
@@ -182,11 +202,12 @@ def test_transitional_text_is_not_returned_before_tool_chain_and_pending_plan():
         Message(tool_calls=[read_prefix]),
         Message(tool_calls=[write_prefix]),
         Message("Plan prêt."),
+        Message("Plan final."),
     ])
     result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run(
         "ajouter un subnet 10.50.0.0/24 et l’affecter au vlan 500"
     )
-    assert len(client.calls) == 5
+    assert len(client.calls) == 6
     assert len(result.pending_confirmation) == 1
     assert "Création du préfixe" in result.message
     assert "Compris" not in result.message
@@ -200,7 +221,7 @@ def test_universal_write_requires_confirmation():
         "app": "dcim", "endpoint": "devices", "method": "filter", "kwargs": {"name": "sw-02"}
     }, "read-device")
     agent = NetBoxAgent(settings(), tools=FakeTools(), client=FakeClient([
-        Message(tool_calls=[read]), Message(tool_calls=[call]), Message("Plan complet")
+        Message(tool_calls=[read]), Message(tool_calls=[call]), Message("Plan complet"), Message("Plan final")
     ]))
     result = agent.run("Crée sw-02")
     assert result.pending_confirmation[0].name == "netbox_write"
@@ -258,6 +279,7 @@ def test_composite_order_produces_one_global_confirmation():
         Message(tool_calls=[create]),
         Message(tool_calls=updates),
         Message("Plan complet"),
+        Message("Plan final"),
     ])
     result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Crée po1 et attache les quatre interfaces")
     assert len(result.pending_confirmation) == 5
@@ -309,6 +331,7 @@ def test_missing_prerequisite_forces_create_or_clarify_recovery():
         Message("Le préfixe n’existe pas."),
         Message(tool_calls=[create]),
         Message("Plan complet"),
+        Message("Plan final"),
     ])
     result = NetBoxAgent(settings(), tools=MissingTools(), client=client).run("Affecte une IP dans 192.168.10.0/24")
     assert len(result.pending_confirmation) == 1

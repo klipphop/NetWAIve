@@ -194,7 +194,9 @@ def test_dtl_read_loads_official_template_without_netbox_mutation(monkeypatch):
         def raise_for_status(self): pass
     monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: Response())
     result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer":"Cisco", "model":"C9300-48P"}))
-    assert result.ok and result.data["template"]["model"] == "Catalyst 9300-48P"
+    assert result.ok and result.data["device_type"]["model"] == "Catalyst 9300-48P"
+    assert result.data["component_templates"]["interfaces"][0]["name"] == "GigabitEthernet1/0/1"
+    assert "/main/device-types/" in result.data["source"]
 
 
 def test_only_three_universal_tools_are_exposed():

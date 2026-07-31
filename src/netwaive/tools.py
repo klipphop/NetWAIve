@@ -191,7 +191,7 @@ class NetBoxTools:
         model = str(query.get("model") or query.get("slug") or "").strip()
         if not manufacturer or not model:
             raise NetBoxChatError("DTL exige manufacturer et model (ou slug).")
-        source = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/master/device-types/{manufacturer}/{model}.yaml"
+        source = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/main/device-types/{manufacturer}/{model}.yaml"
         response = requests.get(source, timeout=15)
         if response.status_code == 404:
             raise ObjectNotFound(f"Modèle DTL absent : {manufacturer}/{model}.")
@@ -199,7 +199,9 @@ class NetBoxTools:
         template = yaml.safe_load(response.text)
         if not isinstance(template, dict):
             raise NetBoxChatError("Template DTL invalide.")
-        return ToolResult(ok=True, message=f"Template DTL officiel chargé : {template.get('manufacturer')} {template.get('model')}.", data={"source": source, "template": template})
+        components = {key: value for key, value in template.items() if isinstance(value, list) and key not in {"tags"}}
+        device_type = {key: value for key, value in template.items() if key not in components and key not in {"manufacturer"}}
+        return ToolResult(ok=True, message=f"Template DTL officiel chargé : {template.get('manufacturer')} {template.get('model')}.", data={"source": source, "manufacturer": template.get("manufacturer"), "device_type": device_type, "component_templates": components, "template": template})
 
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""

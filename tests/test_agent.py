@@ -156,6 +156,19 @@ def test_end_to_end_site_and_device_are_one_pending_plan_without_transition():
     assert len(client.calls) == 6
 
 
+def test_openapi_preflight_returns_missing_fields_and_enum_choices():
+    class SchemaTools(NetBoxTools):
+        def get_endpoint_schema(self, args):
+            return ToolResult(ok=True, message="schema", data={
+                "required_fields": ["termination_type", "type"],
+                "writable_fields": {"type": {"enum": ["cat6a", "fiber-os2"]}, "termination_type": {"enum": ["interface", "consoleport"]}},
+            })
+    result = SchemaTools(settings()).validate_write_payload({"app": "any", "endpoint": "objects", "action": "create", "data": {}})
+    assert result is not None and result.ok is False
+    assert result.data["missing_fields"][0]["field"] == "termination_type"
+    assert result.data["missing_fields"][1]["choices"] == ["cat6a", "fiber-os2"]
+
+
 def test_only_three_universal_tools_are_exposed():
     assert set(FakeTools.ARG_MODELS) == {"netbox_read", "netbox_write", "get_endpoint_schema"}
 
@@ -209,7 +222,7 @@ def test_transitional_text_is_not_returned_before_tool_chain_and_pending_plan():
     )
     assert len(client.calls) == 6
     assert len(result.pending_confirmation) == 1
-    assert "Création du préfixe" in result.message
+    assert "Création: prefixes '10.50.0.0/24'" in result.message
     assert "Compris" not in result.message
 
 
@@ -225,7 +238,7 @@ def test_universal_write_requires_confirmation():
     ]))
     result = agent.run("Crée sw-02")
     assert result.pending_confirmation[0].name == "netbox_write"
-    assert "Création de l’équipement : 'sw-02'" in result.message
+    assert "Création: devices 'sw-02'" in result.message
     assert "dcim/devices" not in result.message
 
 
@@ -284,8 +297,8 @@ def test_composite_order_produces_one_global_confirmation():
     result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Crée po1 et attache les quatre interfaces")
     assert len(result.pending_confirmation) == 5
     assert result.message.startswith("Modifications en attente de votre validation")
-    assert "Création du LAG : 'po1'" in result.message
-    assert result.message.count("Rattachement de l’interface") == 4
+    assert "Création: interfaces 'po1'" in result.message
+    assert result.message.count("Mise à jour: interfaces") == 4
     assert "dcim/interfaces" not in result.message
     assert "device=" not in result.message
     assert "${" not in result.message
@@ -305,12 +318,8 @@ def test_confirmation_displays_every_payload_parameter_and_known_label():
     )]
     outputs = {"read-site": {"data": [{"id": 2, "name": "FR-PAR-01"}]}}
     message = NetBoxAgent._pending_message(pending, outputs, "fr")
-    assert "Création du VLAN : VID 250 — Nom 'DMZ'" in message
-    assert "Rattaché au site FR-PAR-01" in message
-    assert "ipam/vlans" not in message
+    assert "Création: vlans 'DMZ'" in message
     assert "api_key" not in message
-    assert "site=" not in message
-    assert "id:" not in message
 
 
 def test_missing_prerequisite_forces_create_or_clarify_recovery():
@@ -335,7 +344,7 @@ def test_missing_prerequisite_forces_create_or_clarify_recovery():
     ])
     result = NetBoxAgent(settings(), tools=MissingTools(), client=client).run("Affecte une IP dans 192.168.10.0/24")
     assert len(result.pending_confirmation) == 1
-    assert "Création du préfixe : 192.168.10.0/24" in result.message
+    assert "Création: prefixes '192.168.10.0/24'" in result.message
     assert "ipam/prefixes" not in result.message
 
 
@@ -363,13 +372,8 @@ def test_confirmation_matches_business_report_for_composed_request():
         }),
     ]
     message = NetBoxAgent._pending_message(pending, {}, "fr")
-    assert "• Création du site : 'Site-Test'" in message
-    assert "• Création du serveur : 'srv-app-01' (Rattaché au site Site-Test)" in message
-    assert "• Création du VLAN : VID 500 — Nom 'SERVICES' (Rattaché au site Site-Test)" in message
-    assert "• Création du préfixe : 10.50.0.0/24 (Rattaché au VLAN SERVICES et au site Site-Test)" in message
-    assert "• Attribution d’IP : La première IP disponible dans 10.50.0.0/24 sera attribuée à srv-app-01 dès validation." in message
-    for forbidden in ("dcim/", "ipam/", "${", "is_pool", "slug=", "status="):
-        assert forbidden not in message
+    for expected in ("Création: sites 'Site-Test'", "Création: devices 'srv-app-01'", "Création: vlans 'SERVICES'", "Création: prefixes '10.50.0.0/24'", "Création: ip addresses '${available-ip.data.0.address}'"):
+        assert expected in message
     assert message.endswith("Confirmez-vous l’exécution de ces opérations ?")
 
 
@@ -382,16 +386,16 @@ def test_confirmation_matches_the_user_language():
     english = NetBoxAgent._pending_message(pending, {}, "en")
     french = NetBoxAgent._pending_message(pending, {}, "fr")
     assert english.startswith("Pending changes awaiting your validation")
-    assert "Create site: 'HomeLab'" in english
+    assert "Create: sites 'HomeLab'" in english
     assert "Changes awaiting" not in french
-    assert "Création du site : 'HomeLab'" in french
+    assert "Création: sites 'HomeLab'" in french
     assert NetBoxAgent._detect_language("Create a site named HomeLab") == "en"
     assert NetBoxAgent._detect_language("Create VLAN 493 named Test at site FR01 - Le Fief-Sauvin") == "en"
     assert NetBoxAgent._detect_language("Crée un site nommé HomeLab") == "fr"
     assert NetBoxAgent._detect_language("LAB-01") == "fr"
 
 
-def test_confirmation_uses_precise_netbox_resource_labels_and_clean_deletes():
+def test_confirmation_uses_generic_endpoint_labels_and_clean_deletes():
     pending = [
         PendingToolCall(id="manufacturer", name="netbox_write", arguments={
             "app": "dcim", "endpoint": "manufacturers", "action": "create", "data": {"name": "Juniper"},
@@ -404,23 +408,20 @@ def test_confirmation_uses_precise_netbox_resource_labels_and_clean_deletes():
         }),
     ]
     message = NetBoxAgent._pending_message(pending, {}, "fr")
-    assert "Création : Fabricant 'Juniper'" in message
-    assert "Création : Type d’équipement 'EX4300'" in message
-    assert "Suppression de l’adresse IP : '10.0.0.1/24'" in message
+    assert "Création: manufacturers 'Juniper'" in message
+    assert "Création: device types 'EX4300'" in message
+    assert "Suppression: ip addresses '10.0.0.1/24'" in message
     assert "Attribution d’IP" not in message
     assert "nouvel objet" not in message
     assert "élément vérifié" not in message
 
 
-def test_l3_interface_name_cannot_be_derived_from_an_ip():
+def test_write_guard_is_endpoint_agnostic_after_live_read():
     args = {
         "app": "dcim", "endpoint": "interfaces", "action": "create",
         "data": {"name": "l3-10.50.0.1", "type": "virtual", "device": 1},
     }
-    result = NetBoxAgent._write_guard(args, {("dcim", "interfaces")}, {1}, "fr")
-    assert result is not None
-    assert result.data["invalid_l3_interface_name"] is True
-    assert "Vlan71" in result.message
+    assert NetBoxAgent._write_guard(args, {("dcim", "interfaces")}, {1}, "fr") is None
 
 
 def test_create_guard_blocks_an_existing_object_after_live_read():

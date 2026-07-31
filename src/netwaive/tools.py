@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from itertools import islice
 from typing import Any
@@ -233,6 +234,30 @@ class NetBoxTools:
             return None
         record = self._safe(records[0])
         return ToolResult(ok=True, message="Objet existant réutilisé.", data=record)
+
+    def validate_write_payload(self, arguments: dict[str, Any]) -> ToolResult | None:
+        """Generic OpenAPI-driven preflight for required fields and enum choices."""
+        args = NetBoxWriteArgs.model_validate(arguments)
+        if args.action not in {"create", "update"}:
+            return None
+        schema_result = self.get_endpoint_schema(GetEndpointSchemaArgs(app=args.app, endpoint=args.endpoint))
+        if not schema_result.ok:
+            return schema_result
+        schema = schema_result.data if isinstance(schema_result.data, dict) else {}
+        data = dict(args.data)
+        missing = [field for field in schema.get("required_fields", []) if field not in data and args.action == "create"]
+        if missing:
+            details = []
+            writable = schema.get("writable_fields", {})
+            for field in missing:
+                enum = writable.get(field, {}).get("enum") if isinstance(writable.get(field), dict) else None
+                details.append({"field": field, "choices": enum or []})
+            return ToolResult(ok=False, message="Valeurs requises manquantes : " + json.dumps(details, ensure_ascii=False), data={"missing_fields": details})
+        for field, value in data.items():
+            enum = schema.get("writable_fields", {}).get(field, {}).get("enum")
+            if enum and value not in enum:
+                return ToolResult(ok=False, message="Valeur invalide : " + json.dumps({"field": field, "value": value, "choices": enum}, ensure_ascii=False), data={"invalid_field": field, "choices": enum})
+        return None
 
     def netbox_write(self, args: NetBoxWriteArgs) -> ToolResult:
         """Écriture universelle create/update/delete sur n'importe quel endpoint NetBox."""

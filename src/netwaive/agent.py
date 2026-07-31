@@ -253,100 +253,22 @@ class NetBoxAgent:
 
     @classmethod
     def _pending_message(cls, pending: list[PendingToolCall], outputs: dict[str, dict[str, Any]], language: str) -> str:
-        labels = cls._collect_id_labels(outputs)
-        planned_labels = cls._planned_business_labels(pending, labels)
-        planned_relations = cls._planned_relation_labels(pending)
+        """Generic confirmation renderer: endpoint/action/payload only, no resource-specific branches."""
         english = language == "en"
         lines = ["Pending changes awaiting your validation:" if english else "Modifications en attente de votre validation :"]
-        reused: set[tuple[str, str]] = set()
-        relation_labels = {"manufacturer": "Fabricant", "device_type": "Type d’équipement", "role": "Rôle d’équipement", "site": "Site", "vlan": "VLAN"}
-        for call in pending:
-            data = call.arguments.get("data") if isinstance(call.arguments.get("data"), dict) else {}
-            for key in ("manufacturer", "device_type", "role", "site", "vlan"):
-                value = data.get(key)
-                if isinstance(value, int) and len(labels.get(value, set())) == 1:
-                    reused.add((key, next(iter(labels[value]))))
-        if reused:
-            for key, item in sorted(reused):
-                if english:
-                    lines.append(f"• {item}: already present and reused")
-                else:
-                    lines.append(f"• {relation_labels[key]} « {item} » : déjà présent, réutilisé")
-
         for call in pending:
             args = call.arguments
-            data = dict(args.get("data")) if isinstance(args.get("data"), dict) else {}
-            endpoint = str(args.get("endpoint") or "").replace("_", "-").lower()
+            data = args.get("data") if isinstance(args.get("data"), dict) else {}
             action = str(args.get("action") or "create").lower()
-            resource = cls._resource_label(endpoint, data, language)
-            relation = cls._relation_suffix(data, labels, planned_labels, planned_relations, language=language)
-            name = cls._business_value(data.get("name") or data.get("model"), labels, planned_labels)
-            target = cls._business_value(data.get("id"), labels, planned_labels)
-            display = target or name or planned_labels.get(call.id, resource)
-
-            if action == "delete":
-                if endpoint == "ip-addresses":
-                    address = cls._business_value(data.get("address"), labels, planned_labels) or display
-                    line = f"• Delete IP address: '{address}'" if english else f"• Suppression de l’adresse IP : '{address}'"
-                else:
-                    line = f"• Delete: {resource} '{display}'" if english else f"• Suppression : {resource} '{display}'"
-            elif endpoint == "sites" and action == "create":
-                line = f"• Create site: '{name or resource}'" if english else f"• Création du site : '{name or resource}'"
-            elif endpoint == "devices" and action == "create":
-                if english:
-                    noun = "server" if re.match(r"(?i)^(srv|server)", name or "") else "device"
-                    line = f"• Create {noun}: '{name or resource}'{relation}"
-                elif re.match(r"(?i)^(srv|server)", name or ""):
-                    line = f"• Création du serveur : '{name}'{relation}"
-                else:
-                    line = f"• Création de l’équipement : '{name or resource}'{relation}"
-            elif endpoint == "interfaces" and action == "create" and str(data.get("type") or "").lower() == "lag":
-                line = f"• Create LAG: '{name or resource}'{relation}" if english else f"• Création du LAG : '{name or resource}'{relation}"
-            elif endpoint == "vlans" and action == "create":
-                vid = data.get("vid")
-                line = f"• Create VLAN: VID {vid} — Name '{name or resource}'{relation}" if english else f"• Création du VLAN : VID {vid} — Nom '{name or resource}'{relation}"
-            elif endpoint == "prefixes" and action == "create":
-                prefix = cls._business_value(data.get("prefix"), labels, planned_labels) or resource
-                line = f"• Create prefix: {prefix}{relation}" if english else f"• Création du préfixe : {prefix}{relation}"
-                if data.get("is_pool") is True:
-                    line += " — Used as an address pool" if english else " — Utilisé comme pool d’adresses"
-            elif endpoint == "ip-addresses":
-                address = cls._business_value(data.get("address"), labels, planned_labels)
-                destination = cls._business_value(data.get("device") or data.get("assigned_object_id") or data.get("interface"), labels, planned_labels)
-                if destination == "__planned_reference__":
-                    destination = planned_relations.get("device", "the planned target" if english else "la cible prévue")
-                source_prefix = planned_relations.get("prefix") or next((value for value in planned_labels.values() if "/" in value), "the planned prefix" if english else "le préfixe prévu")
-                if not address or address == "__planned_reference__" or address == ("IP Address" if english else "Adresse IP"):
-                    line = (
-                        f"• IP assignment: The first available IP in {source_prefix} will be assigned"
-                        if english
-                        else f"• Attribution d’IP : La première IP disponible dans {source_prefix} sera attribuée"
-                    )
-                else:
-                    line = f"• IP assignment: {address} will be assigned" if english else f"• Attribution d’IP : L’adresse {address} sera attribuée"
-                if destination:
-                    line += f" to {destination}" if english else f" à {destination}"
-                line += " upon validation." if english else " dès validation."
-            elif endpoint == "interfaces" and action == "update" and "lag" in data:
-                interface = target or name or ("Interface" if english else "Interface")
-                lag = cls._business_value(data.get("lag"), labels, planned_labels)
-                if lag == "__planned_reference__":
-                    lag = planned_relations.get("lag", "LAG")
-                line = f"• Attach interface '{interface}' to LAG '{lag}'" if english else f"• Rattachement de l’interface '{interface}' au LAG '{lag}'"
-            elif endpoint == "prefixes" and action == "update" and "vlan" in data:
-                prefix = target or cls._business_value(data.get("prefix"), labels, planned_labels) or ("Prefix" if english else "Préfixe")
-                vlan = cls._business_value(data.get("vlan"), labels, planned_labels)
-                if vlan == "__planned_reference__":
-                    vlan = planned_relations.get("vlan", "VLAN")
-                line = f"• Attach prefix {prefix} to VLAN '{vlan}'{relation}" if english else f"• Rattachement du préfixe {prefix} au VLAN '{vlan}'{relation}"
-            elif action == "update":
-                line = f"• Update: {resource} '{display}'{relation}" if english else f"• Mise à jour : {resource} '{display}'{relation}"
-            else:
-                line = f"• Create: {resource} '{display}'{relation}" if english else f"• Création : {resource} '{display}'{relation}"
-            lines.append(line)
-
+            endpoint = str(args.get("endpoint") or "object").replace("_", "-")
+            label = endpoint.replace("-", " ")
+            identity = next((str(data[key]) for key in ("name", "slug", "prefix", "address", "model", "id") if data.get(key) not in (None, "")), "")
+            verb = {"create": "Create", "update": "Update", "delete": "Delete"}.get(action, action.title()) if english else {"create": "Création", "update": "Mise à jour", "delete": "Suppression"}.get(action, action.title())
+            display = f"{label} '{identity}'" if identity else label
+            lines.append(f"• {verb}: {display}")
         lines.append("\nDo you approve these operations?" if english else "\nConfirmez-vous l’exécution de ces opérations ?")
-        return "\n".join(lines).replace("__planned_reference__", "NetBox object" if english else "Objet NetBox")
+        return "\n".join(lines)
+
 
     @staticmethod
     def _target_key(arguments: dict[str, Any]) -> tuple[str, str]:
@@ -408,19 +330,6 @@ class NetBoxAgent:
                             message=message,
                             data={"existing_object": True, "resource": resource},
                         )
-        if target == ("dcim", "interfaces") and action == "create":
-            name = str(data.get("name") or "")
-            interface_type = str(data.get("type") or "").lower()
-            ip_derived_name = re.fullmatch(r"(?:l3[-_.]?)?\d{1,3}(?:\.\d{1,3}){3}", name, re.IGNORECASE)
-            if interface_type in {"virtual", "l3"} and ip_derived_name:
-                return ToolResult(
-                    ok=False,
-                    message=(
-                        "Nom d’interface L3 refusé : une adresse IP ne doit pas servir de nom. "
-                        "Utilise une SVI telle que Vlan71 ou l’interface physique explicitement demandée."
-                    ),
-                    data={"invalid_l3_interface_name": True},
-                )
         object_id = data.get("id") if isinstance(data, dict) else None
         if action in {"update", "delete"} and isinstance(object_id, int) and object_id not in observed_ids:
             message = (
@@ -608,17 +517,25 @@ class NetBoxAgent:
             for call, arguments in parsed:
                 if call.function.name in self.tools.MUTATING_TOOLS and not confirm_write:
                     arguments = self._resolve_available_references(arguments, tool_outputs)
-                    guard = self._write_guard(arguments, read_targets, observed_ids, language, observed_records)
-                    if guard is not None:
-                        result = guard
+                    preflight = None
+                    validator = getattr(self.tools, "validate_write_payload", None)
+                    if callable(validator):
+                        preflight = validator(arguments)
+                    if preflight is not None and not preflight.ok:
+                        result = preflight
                         collected.append(result)
                     else:
-                        pending_call = PendingToolCall(id=call.id, name=call.function.name, arguments=arguments)
-                        signature = self._call_signature(pending_call)
-                        if signature not in signatures:
-                            write_plan.append(pending_call)
-                            signatures.add(signature)
-                        result = self._planned_result(pending_call)
+                        guard = self._write_guard(arguments, read_targets, observed_ids, language, observed_records)
+                        if guard is not None:
+                            result = guard
+                            collected.append(result)
+                        else:
+                            pending_call = PendingToolCall(id=call.id, name=call.function.name, arguments=arguments)
+                            signature = self._call_signature(pending_call)
+                            if signature not in signatures:
+                                write_plan.append(pending_call)
+                                signatures.add(signature)
+                            result = self._planned_result(pending_call)
                 else:
                     result = self.tools.execute(call.function.name, arguments)
                     collected.append(result)

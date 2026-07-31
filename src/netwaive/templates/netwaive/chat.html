@@ -7,14 +7,14 @@
     <div class="col-12 col-xl-9">
       <div class="card">
         <div class="card-header d-flex align-items-center justify-content-between">
-          <strong>NetWAIve</strong>
+          <strong>{{ widget_title }}</strong>
           <div class="d-flex align-items-center gap-2">
             <span class="badge text-bg-secondary" id="netwaive-status">Initialisation…</span>
             <button type="button" class="btn btn-sm btn-outline-secondary" id="netwaive-clear">Nouvelle session</button>
           </div>
         </div>
         <div class="card-body">
-          <div class="alert alert-info small">Assistant NetBox local. Lecture/écriture selon la configuration globale du plugin. Les écritures demandent une confirmation.</div>
+          <div class="alert alert-info small">{{ banner }}</div>
           <div id="netwaive-messages" class="border rounded p-3 mb-3" style="min-height: 260px; max-height: 55vh; overflow-y: auto;"></div>
           <form id="netwaive-form" class="d-flex gap-2">
             {% csrf_token %}

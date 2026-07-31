@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import requests
+import yaml
 import re
 from itertools import islice
 from typing import Any
@@ -182,8 +184,27 @@ class NetBoxTools:
             data=data,
         )
 
+    def _read_dtl(self, args: NetBoxReadArgs) -> ToolResult:
+        """Read an official Device Type Library YAML template; it never mutates NetBox."""
+        query = args.merged_kwargs()
+        manufacturer = str(query.get("manufacturer") or "").strip()
+        model = str(query.get("model") or query.get("slug") or "").strip()
+        if not manufacturer or not model:
+            raise NetBoxChatError("DTL exige manufacturer et model (ou slug).")
+        source = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/master/device-types/{manufacturer}/{model}.yaml"
+        response = requests.get(source, timeout=15)
+        if response.status_code == 404:
+            raise ObjectNotFound(f"Modèle DTL absent : {manufacturer}/{model}.")
+        response.raise_for_status()
+        template = yaml.safe_load(response.text)
+        if not isinstance(template, dict):
+            raise NetBoxChatError("Template DTL invalide.")
+        return ToolResult(ok=True, message=f"Template DTL officiel chargé : {template.get('manufacturer')} {template.get('model')}.", data={"source": source, "template": template})
+
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""
+        if self._normalize(args.app) == "dtl" and self._normalize(args.endpoint) in {"devicetype", "devicetypes"}:
+            return self._read_dtl(args)
         if self._normalize(args.app) == "ipam" and self._normalize(args.endpoint) in {"availableips", "prefixavailableips"}:
             return self._read_available_ips(args)
         endpoint, app_name, plugin, actual = self._resolve_endpoint(args.app, args.endpoint)

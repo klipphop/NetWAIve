@@ -16,6 +16,7 @@
     const input = widget.querySelector(".netwaive-drawer-input");
     const messages = widget.querySelector(".netwaive-drawer-messages");
     const status = widget.querySelector(".netwaive-drawer-status");
+    const banner = widget.querySelector("[data-netwaive-banner]")?.dataset.netwaiveBanner || "Assistant NetBox (Beta)";
 
     const POS_KEY = "netwaive-window-pos-v3";
     const LAYOUT_KEY = "netwaive-layout-v1";
@@ -212,7 +213,7 @@
       messages.replaceChildren();
       const intro = document.createElement("div");
       intro.className = "netwaive-intro";
-      intro.textContent = "Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.";
+      intro.textContent = banner;
       messages.appendChild(intro);
       state.history.forEach(item => addMessage(item.role, item.text));
       renderPendingControls();

@@ -6,7 +6,7 @@
 </button>
 <section class="netwaive-drawer" hidden aria-label="NetWAIve">
   <header class="netwaive-drawer-header" data-netwaive-drag-handle>
-    <strong>NetWAIve</strong>
+    <strong>{{ widget_title }}</strong>
     <span class="netwaive-drawer-status netwaive-status">RW · pynetbox…</span>
     <div class="netwaive-actions" aria-label="Actions de fenêtre">
       <button type="button" class="netwaive-clear" title="Nouvelle session" aria-label="Nouvelle session">↺</button>
@@ -21,7 +21,7 @@
   </div>
 
   <div class="netwaive-drawer-messages">
-    <div class="netwaive-intro">Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.</div>
+    <div class="netwaive-intro" data-netwaive-banner="{{ banner }}">{{ banner }}</div>
   </div>
 
   <form class="netwaive-drawer-form">

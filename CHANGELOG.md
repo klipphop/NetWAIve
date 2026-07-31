@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-31
+
+### Added
+- Added read-only retrieval of official Device Type Library YAML templates through the universal read tool.
+- Added bilingual Beta banners and widget headers.
+
+### Changed
+- Instructed planning to propose close NetBox matches and DTL-backed component templates before creating missing dependencies.
+
 ## [0.3.27] - 2026-07-30
 
 ### Fixed

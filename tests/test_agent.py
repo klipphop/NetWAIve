@@ -187,6 +187,16 @@ def test_preflight_collision_stops_a_pending_write():
     assert any("déjà câblée" in item.message for item in result.tool_results)
 
 
+def test_dtl_read_loads_official_template_without_netbox_mutation(monkeypatch):
+    class Response:
+        status_code = 200
+        text = "manufacturer: Cisco\nmodel: Catalyst 9300-48P\ninterfaces:\n  - name: GigabitEthernet1/0/1\n"
+        def raise_for_status(self): pass
+    monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: Response())
+    result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer":"Cisco", "model":"C9300-48P"}))
+    assert result.ok and result.data["template"]["model"] == "Catalyst 9300-48P"
+
+
 def test_only_three_universal_tools_are_exposed():
     assert set(FakeTools.ARG_MODELS) == {"netbox_read", "netbox_write", "get_endpoint_schema"}
 

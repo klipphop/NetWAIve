@@ -4,7 +4,7 @@ from .config import Settings
 from .tools import NetBoxTools
 
 __all__ = ["AgentResponse", "NetBoxAgent", "NetBoxTools", "Settings"]
-__version__ = "0.3.13"
+__version__ = "0.3.14"
 
 try:  # Chargé uniquement dans le venv NetBox.
     from netbox.plugins import PluginConfig

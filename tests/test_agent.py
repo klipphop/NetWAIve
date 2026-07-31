@@ -405,7 +405,7 @@ def test_recent_context_is_injected_into_agent_messages():
     history = [
         {"role": "assistant", "text": "Il reste à rattacher 1/1/21 à 1/1/24 au LAG po1."},
     ]
-    NetBoxAgent(settings(), tools=FakeTools(), client=client).run("attache les interfaces", history=history)
+    NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Quel est le rattachement des interfaces ?", history=history)
     sent = client.calls[0]["messages"]
     assert any("1/1/21 à 1/1/24" in item.get("content", "") for item in sent)
 

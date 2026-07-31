@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.23] - 2026-07-30
+
+### Changed
+- Removed Device-specific relation rewriting and structured-text state injection from the generic runner.
+- Returned native NetBox API error payloads without resource-specific translation.
+
 ## [0.3.22] - 2026-07-30
 
 ### Fixed

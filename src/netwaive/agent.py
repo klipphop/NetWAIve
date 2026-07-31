@@ -646,14 +646,11 @@ class NetBoxAgent:
         history: list[dict[str, str]] | None = None,
     ) -> AgentResponse:
         messages = self._messages(user_message, history)
-        structured = self._is_structured_plan(user_message)
-        if structured:
-            messages.append({"role": "user", "content": "Le bloc structuré fourni est un plan de création global explicite. Interprète-le directement, découvre les dépendances NetBox et prépare le plan complet sans demander de reformulation."})
         return self._loop(
             messages,
             confirm_write=confirm_write,
             language=self._detect_language(user_message),
-            require_live_plan=self._is_explicit_write_request(user_message) or structured,
+            require_live_plan=self._is_explicit_write_request(user_message),
         )
 
     @staticmethod

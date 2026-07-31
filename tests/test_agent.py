@@ -98,11 +98,9 @@ def test_plan_sanitization_deduplicates_and_rejects_unknown_variables():
     assert errors
 
 
-def test_netbox_errors_are_translated_to_actionable_french():
+def test_netbox_errors_preserve_native_payload():
     message = NetBoxTools._friendly_error("Related object not found: device role 'Switch'")
-    assert "rôle d’équipement" in message
-    assert "Switch" in message
-    assert "JSON" not in message
+    assert message == "Related object not found: device role 'Switch'"
 
 
 def test_symbolic_reference_resolves_call_aliases_and_result_ids():

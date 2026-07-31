@@ -67,23 +67,8 @@ class NetBoxTools:
 
     @staticmethod
     def _friendly_error(detail: Any) -> str:
-        raw = str(detail)
-        lowered = raw.lower()
-        quoted = re.search(r"['\"]([^'\"]+)['\"]", raw)
-        name = quoted.group(1) if quoted else "demandé"
-        if "already exists" in lowered or "unique" in lowered or "409" in lowered:
-            return "NetBox signale qu’un objet équivalent existe déjà. Vérifie son nom, son slug ou son identifiant avant de poursuivre."
-        if "required" in lowered or "400" in lowered or "validation" in lowered:
-            return "NetBox refuse l’opération car un champ requis est absent ou invalide. Je peux vérifier le schéma et compléter les paramètres nécessaires."
-        if "device role" in lowered or "devicerole" in lowered or "role" in lowered and "not found" in lowered:
-            return f"Le rôle d’équipement « {name} » n’existe pas encore dans NetBox. Souhaites-tu que je le crée d’abord ?"
-        if "device type" in lowered or "devicetype" in lowered:
-            return f"Le type d’équipement « {name} » est introuvable dans NetBox. Il faut le créer ou choisir un type existant avant de créer l’équipement."
-        if "site" in lowered and ("not found" in lowered or "related object" in lowered):
-            return f"Le site « {name} » est introuvable dans NetBox. Il faut le créer ou sélectionner un site existant avant de poursuivre."
-        if "related object" in lowered or "not found" in lowered:
-            return "Une dépendance NetBox requise est introuvable. Je peux la rechercher ou préparer sa création avant de reprendre l’opération."
-        return "NetBox a refusé l’opération. Vérifie les dépendances et les champs requis avant de la relancer."
+        """Return the native NetBox API error payload without resource-specific rewriting."""
+        return str(detail)
 
     def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         model = self.ARG_MODELS.get(name)
@@ -255,18 +240,6 @@ class NetBoxTools:
         if endpoint is None:
             raise NetBoxChatError("Une ressource précise du plugin est obligatoire pour une écriture.")
         data = dict(args.data)
-        if args.action == "create" and self._normalize(args.app) == "dcim" and self._normalize(args.endpoint) in {"devices", "device"} and any(key in data for key in ("site", "role", "device_type", "manufacturer")):
-            relations = {"site": (self.api.dcim.sites, "site"), "role": (self.api.dcim.device_roles, "rôle d’équipement"), "device_type": (self.api.dcim.device_types, "type d’équipement"), "manufacturer": (self.api.dcim.manufacturers, "fabricant")}
-            for field, (relation_endpoint, label) in relations.items():
-                value = data.get(field)
-                if not isinstance(value, str) or value.strip().lower() == field:
-                    if isinstance(value, str):
-                        raise ObjectNotFound(f"Le {label} demandé est absent ou invalide dans NetBox.")
-                    continue
-                record = relation_endpoint.get(slug=value) or relation_endpoint.get(name=value)
-                if record is None:
-                    raise ObjectNotFound(f"Le {label} « {value} » n’existe pas encore dans NetBox. Souhaites-tu que je le crée d’abord ?")
-                data[field] = record.id
 
         if args.action == "create":
             record = endpoint.create(data)

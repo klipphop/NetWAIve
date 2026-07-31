@@ -559,6 +559,9 @@ class NetBoxAgent:
                     missing_recovery_used = True
                     continue
                 if write_plan:
+                    write_plan, sanitation_errors = self._sanitize_plan(write_plan)
+                    if sanitation_errors:
+                        return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
                     return AgentResponse(
                         message=self._pending_message(write_plan, tool_outputs, language),
                         pending_confirmation=write_plan,
@@ -604,6 +607,9 @@ class NetBoxAgent:
                 })
 
         if write_plan:
+            write_plan, sanitation_errors = self._sanitize_plan(write_plan)
+            if sanitation_errors:
+                return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
             return AgentResponse(
                 message=self._pending_message(write_plan, tool_outputs, language),
                 pending_confirmation=write_plan,
@@ -643,6 +649,26 @@ class NetBoxAgent:
         return set()
 
     @classmethod
+    def _sanitize_plan(cls, pending: list[PendingToolCall]) -> tuple[list[PendingToolCall], list[str]]:
+        """Deduplicate exact calls and reject unresolved/unknown symbolic references before confirmation."""
+        unique: list[PendingToolCall] = []
+        seen: set[str] = set()
+        for call in pending:
+            signature = cls._call_signature(call)
+            if signature not in seen:
+                seen.add(signature)
+                unique.append(call)
+        call_ids = {call.id for call in unique}
+        errors: list[str] = []
+        for call in unique:
+            rendered = json.dumps(call.arguments, ensure_ascii=False)
+            if "${" in rendered:
+                refs = cls._reference_dependencies(call.arguments)
+                if not refs or refs - call_ids:
+                    errors.append(f"La référence de l’étape « {call.id} » est invalide ou inconnue.")
+        return cls._order_pending(unique), errors
+
+    @classmethod
     def _order_pending(cls, pending: list[PendingToolCall]) -> list[PendingToolCall]:
         """Stable topological ordering: parent creations always precede dependent calls."""
         by_id = {call.id: call for call in pending}
@@ -668,7 +694,9 @@ class NetBoxAgent:
         history: list[dict[str, str]] | None = None,
     ) -> AgentResponse:
         """Exécute exactement le lot approuvé et clôt immédiatement ce cycle."""
-        ordered = self._order_pending(pending)
+        ordered, sanitation_errors = self._sanitize_plan(pending)
+        if sanitation_errors:
+            return AgentResponse(message="Plan refusé avant exécution : " + " ".join(sanitation_errors), tool_results=[])
         results: list[ToolResult] = []
         outputs: dict[str, dict[str, Any]] = {}
         failed_call: PendingToolCall | None = None

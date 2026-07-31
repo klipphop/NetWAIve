@@ -89,6 +89,15 @@ def tool_call(name, arguments, call_id="call-1"):
     )
 
 
+def test_plan_sanitization_deduplicates_and_rejects_unknown_variables():
+    call = PendingToolCall(id="site", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":"LAB"}})
+    clean, errors = NetBoxAgent._sanitize_plan([call, call])
+    assert len(clean) == 1 and not errors
+    bad = PendingToolCall(id="device", name="netbox_write", arguments={"app":"dcim","endpoint":"devices","action":"create","data":{"site":"${existing?.id}"}})
+    _, errors = NetBoxAgent._sanitize_plan([bad])
+    assert errors
+
+
 def test_netbox_errors_are_translated_to_actionable_french():
     message = NetBoxTools._friendly_error("Related object not found: device role 'Switch'")
     assert "rôle d’équipement" in message

@@ -71,6 +71,10 @@ class NetBoxTools:
         lowered = raw.lower()
         quoted = re.search(r"['\"]([^'\"]+)['\"]", raw)
         name = quoted.group(1) if quoted else "demandé"
+        if "already exists" in lowered or "unique" in lowered or "409" in lowered:
+            return "NetBox signale qu’un objet équivalent existe déjà. Vérifie son nom, son slug ou son identifiant avant de poursuivre."
+        if "required" in lowered or "400" in lowered or "validation" in lowered:
+            return "NetBox refuse l’opération car un champ requis est absent ou invalide. Je peux vérifier le schéma et compléter les paramètres nécessaires."
         if "device role" in lowered or "devicerole" in lowered or "role" in lowered and "not found" in lowered:
             return f"Le rôle d’équipement « {name} » n’existe pas encore dans NetBox. Souhaites-tu que je le crée d’abord ?"
         if "device type" in lowered or "devicetype" in lowered:

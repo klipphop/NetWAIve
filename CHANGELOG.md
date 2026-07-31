@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.19] - 2026-07-30
+
+### Changed
+- Added generic plan sanitation, strict deduplication, reference validation, and topological execution for all NetBox resources.
+
+### Fixed
+- Stopped unresolved variables before any NetBox API call and translated 400/409 validation errors into actionable French.
+
 ## [0.3.18] - 2026-07-30
 
 ### Fixed

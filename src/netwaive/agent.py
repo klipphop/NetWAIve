@@ -618,6 +618,34 @@ class NetBoxAgent:
             require_live_plan=self._is_explicit_write_request(user_message) or structured,
         )
 
+    @staticmethod
+    def _reference_dependencies(value: Any) -> set[str]:
+        if isinstance(value, dict):
+            return set().union(*(NetBoxAgent._reference_dependencies(item) for item in value.values()))
+        if isinstance(value, list):
+            return set().union(*(NetBoxAgent._reference_dependencies(item) for item in value))
+        if isinstance(value, str):
+            return {match.group(1).split(".", 1)[0] for match in REFERENCE_RE.finditer(value)}
+        return set()
+
+    @classmethod
+    def _order_pending(cls, pending: list[PendingToolCall]) -> list[PendingToolCall]:
+        """Stable topological ordering: parent creations always precede dependent calls."""
+        by_id = {call.id: call for call in pending}
+        unresolved = list(pending)
+        ordered: list[PendingToolCall] = []
+        resolved: set[str] = set()
+        while unresolved:
+            ready = [call for call in unresolved if cls._reference_dependencies(call.arguments).intersection(by_id).issubset(resolved)]
+            if not ready:
+                ordered.extend(unresolved)
+                break
+            for call in ready:
+                ordered.append(call)
+                resolved.add(call.id)
+                unresolved.remove(call)
+        return ordered
+
     def confirm(
         self,
         user_message: str,
@@ -626,22 +654,26 @@ class NetBoxAgent:
         history: list[dict[str, str]] | None = None,
     ) -> AgentResponse:
         """Exécute exactement le lot approuvé et clôt immédiatement ce cycle."""
+        ordered = self._order_pending(pending)
         results: list[ToolResult] = []
         outputs: dict[str, dict[str, Any]] = {}
-        for call in pending:
+        failed_call: PendingToolCall | None = None
+        for call in ordered:
             try:
                 arguments = self._resolve_references(call.arguments, outputs)
             except ValueError as exc:
                 results.append(ToolResult(ok=False, message=str(exc)))
+                failed_call = call
                 break
             result = self.tools.execute(call.name, arguments)
             results.append(result)
             outputs[call.id] = result.model_dump()
             if not result.ok:
+                failed_call = call
                 break
 
         language = self._detect_language(user_message)
-        if results and all(result.ok for result in results) and len(results) == len(pending):
+        if results and all(result.ok for result in results) and len(results) == len(ordered):
             message = (
                 f"{len(results)} approved operation(s) were executed successfully. The requested configuration is now in place."
                 if language == "en"
@@ -649,11 +681,28 @@ class NetBoxAgent:
             )
         else:
             completed = sum(1 for result in results if result.ok)
-            remaining = pending[len(results):]
+            failed_id = failed_call.id if failed_call else ""
+            blocked = {failed_id} if failed_id else set()
+            tail = ordered[len(results):]
+            runnable: list[PendingToolCall] = []
+            for call in tail:
+                dependencies = self._reference_dependencies(call.arguments)
+                if dependencies & blocked:
+                    blocked.add(call.id)
+                    continue
+                try:
+                    resolved = self._resolve_references(call.arguments, outputs)
+                except ValueError:
+                    blocked.add(call.id)
+                    continue
+                runnable.append(PendingToolCall(id=call.id, name=call.name, arguments=resolved))
+            failure = results[-1].message if results and not results[-1].ok else "unknown error"
             message = (
-                f"Execution stopped: {completed} operation(s) out of {len(pending)} succeeded. Would you like to complete the {len(remaining)} remaining operation(s)?"
+                f"Execution stopped after {completed}/{len(ordered)} operations. NetBox error: {failure}. "
+                f"{len(runnable)} independent operation(s) can still be completed."
                 if language == "en"
-                else f"Exécution interrompue : {completed} opération(s) sur {len(pending)} ont réussi. Souhaitez-vous finaliser les {len(remaining)} opération(s) restantes ?"
+                else f"Exécution interrompue après {completed}/{len(ordered)} opérations. Erreur NetBox : {failure}. "
+                f"{len(runnable)} opération(s) indépendante(s) peuvent encore être finalisées."
             )
-            return AgentResponse(message=message, tool_results=results, pending_confirmation=remaining)
+            return AgentResponse(message=message, tool_results=results, pending_confirmation=runnable)
         return AgentResponse(message=message, tool_results=results)

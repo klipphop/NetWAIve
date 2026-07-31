@@ -62,7 +62,7 @@ class NetBoxAgent:
     @staticmethod
     def _is_transitional_response(content: str) -> bool:
         return bool(re.search(
-            r"\b(compris|poursuis|continuer|automatiquement|prépare|je vais|enchaîne|understood|proceed|continue|automatically|prepare|i will)\b",
+            r"\b(compris|poursuis|continuer|automatiquement|prépare|je vais|enchaîne|vérifie|vérification|analyse|understood|proceed|continue|automatically|prepare|i will|verify|checking|analyzing)\b",
             content,
             re.IGNORECASE,
         ))
@@ -258,16 +258,20 @@ class NetBoxAgent:
         planned_relations = cls._planned_relation_labels(pending)
         english = language == "en"
         lines = ["Pending changes awaiting your validation:" if english else "Modifications en attente de votre validation :"]
-        reused: set[str] = set()
+        reused: set[tuple[str, str]] = set()
+        relation_labels = {"manufacturer": "Fabricant", "device_type": "Type d’équipement", "role": "Rôle d’équipement", "site": "Site", "vlan": "VLAN"}
         for call in pending:
             data = call.arguments.get("data") if isinstance(call.arguments.get("data"), dict) else {}
             for key in ("manufacturer", "device_type", "role", "site", "vlan"):
                 value = data.get(key)
                 if isinstance(value, int) and len(labels.get(value, set())) == 1:
-                    reused.add(next(iter(labels[value])))
+                    reused.add((key, next(iter(labels[value]))))
         if reused:
-            prefix = "• Reused existing NetBox object: " if english else "• Objet NetBox existant réutilisé : "
-            lines.extend(prefix + item for item in sorted(reused))
+            for key, item in sorted(reused):
+                if english:
+                    lines.append(f"• {item}: already present and reused")
+                else:
+                    lines.append(f"• {relation_labels[key]} « {item} » : déjà présent, réutilisé")
 
         for call in pending:
             args = call.arguments

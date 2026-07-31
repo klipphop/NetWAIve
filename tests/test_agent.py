@@ -89,6 +89,24 @@ def tool_call(name, arguments, call_id="call-1"):
     )
 
 
+def test_structured_yaml_and_ascii_inputs_are_treated_as_creation_plans():
+    assert NetBoxAgent._is_structured_plan("sites:\n  - name: LAB-PARIS")
+    assert NetBoxAgent._is_structured_plan("├── SRV-PROXMOX\n└── SW-TOR-01")
+
+
+def test_partial_failure_retains_unexecuted_calls_for_completion():
+    class PartialTools(FakeTools):
+        def __init__(self): self.count = 0
+        def execute(self, name, arguments):
+            self.count += 1
+            return ToolResult(ok=self.count != 2, message="OK" if self.count != 2 else "failed", data=arguments)
+    pending = [PendingToolCall(id=f"c{i}", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":f"S{i}"}}) for i in range(3)]
+    result = NetBoxAgent(settings(), tools=PartialTools(), client=FakeClient([])).confirm("Créer les sites", pending)
+    assert len(result.pending_confirmation) == 1
+    assert result.pending_confirmation[0].id == "c2"
+    assert "finaliser" in result.message
+
+
 def test_only_three_universal_tools_are_exposed():
     assert set(FakeTools.ARG_MODELS) == {"netbox_read", "netbox_write", "get_endpoint_schema"}
 

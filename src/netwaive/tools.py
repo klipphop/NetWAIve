@@ -182,6 +182,10 @@ class NetBoxTools:
             return self._plugin_overview(plugin)
 
         kwargs = args.merged_kwargs()
+        if self._normalize(args.app) == "ipam" and self._normalize(args.endpoint) in {"prefixes", "prefix"}:
+            # NetBox IPAM prefix filtering does not accept the generic site relation filter.
+            kwargs.pop("site", None)
+            kwargs.pop("site_id", None)
         if args.method == "all":
             records = list(islice(endpoint.all(limit=args.limit), args.limit))
             data: Any = [self._safe(record) for record in records]

@@ -56,7 +56,7 @@ Construction d'un wheel :
 
 ```bash
 python -m build
-pip install dist/netwaive-0.3.14-py3-none-any.whl
+pip install dist/netwaive-0.3.15-py3-none-any.whl
 ```
 
 ## Configuration
@@ -103,12 +103,12 @@ PLUGINS_CONFIG = {
 ```
 
 ```bash
-/opt/netbox/venv/bin/pip install dist/netwaive-0.3.14-py3-none-any.whl
+/opt/netbox/venv/bin/pip install dist/netwaive-0.3.15-py3-none-any.whl
 /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py check
 systemctl restart netbox netbox-rq
 ```
 
-La version `0.3.14` inclut le widget global flottant/docké et une page de chat dédiée. Le widget est injecté via `PluginTemplateExtension` lorsque le plugin est activé dans `PLUGINS`.
+La version `0.3.15` inclut le widget global flottant/docké et une page de chat dédiée. Le widget est injecté via `PluginTemplateExtension` lorsque le plugin est activé dans `PLUGINS`.
 
 ## Utilisation Python
 

@@ -52,6 +52,14 @@ class NetBoxAgent:
         ))
 
     @staticmethod
+    def _is_structured_plan(message: str) -> bool:
+        return bool(re.search(
+            r"(^|\n)\s*(?:[-*]|├──|└──|│|[\w-]+\s*:\s*(?:$|[^\n]+)|\{\s*\")",
+            message,
+            re.MULTILINE,
+        ))
+
+    @staticmethod
     def _is_transitional_response(content: str) -> bool:
         return bool(re.search(
             r"\b(compris|poursuis|continuer|automatiquement|prépare|je vais|enchaîne|understood|proceed|continue|automatically|prepare|i will)\b",
@@ -599,11 +607,15 @@ class NetBoxAgent:
         confirm_write: bool = False,
         history: list[dict[str, str]] | None = None,
     ) -> AgentResponse:
+        messages = self._messages(user_message, history)
+        structured = self._is_structured_plan(user_message)
+        if structured:
+            messages.append({"role": "user", "content": "Le bloc structuré fourni est un plan de création global explicite. Interprète-le directement, découvre les dépendances NetBox et prépare le plan complet sans demander de reformulation."})
         return self._loop(
-            self._messages(user_message, history),
+            messages,
             confirm_write=confirm_write,
             language=self._detect_language(user_message),
-            require_live_plan=self._is_explicit_write_request(user_message),
+            require_live_plan=self._is_explicit_write_request(user_message) or structured,
         )
 
     def confirm(
@@ -637,9 +649,11 @@ class NetBoxAgent:
             )
         else:
             completed = sum(1 for result in results if result.ok)
+            remaining = pending[len(results):]
             message = (
-                f"Execution stopped: {completed} operation(s) out of {len(pending)} succeeded. No remaining operation was retried automatically."
+                f"Execution stopped: {completed} operation(s) out of {len(pending)} succeeded. Would you like to complete the {len(remaining)} remaining operation(s)?"
                 if language == "en"
-                else f"Exécution interrompue : {completed} opération(s) sur {len(pending)} ont réussi. Aucune opération restante n’a été relancée automatiquement."
+                else f"Exécution interrompue : {completed} opération(s) sur {len(pending)} ont réussi. Souhaitez-vous finaliser les {len(remaining)} opération(s) restantes ?"
             )
+            return AgentResponse(message=message, tool_results=results, pending_confirmation=remaining)
         return AgentResponse(message=message, tool_results=results)

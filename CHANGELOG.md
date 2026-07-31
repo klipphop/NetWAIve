@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.15] - 2026-07-30
+
+### Added
+- Structured YAML, JSON-like, and ASCII-tree inputs are treated as direct global creation plans.
+- Recovery confirmation for operations that were not executed after a partial plan failure.
+
+### Changed
+- Cable planning now requires discovery or creation of both interfaces before the cable can reference their real or same-plan IDs.
+
+### Fixed
+- Removed unsupported site filters from IPAM prefix searches.
+- Preserved unexecuted operations after a failed multi-step confirmation for immediate completion planning.
+
 ## [0.3.14] - 2026-07-30
 
 ### Fixed

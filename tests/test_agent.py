@@ -89,6 +89,13 @@ def tool_call(name, arguments, call_id="call-1"):
     )
 
 
+def test_netbox_errors_are_translated_to_actionable_french():
+    message = NetBoxTools._friendly_error("Related object not found: device role 'Switch'")
+    assert "rôle d’équipement" in message
+    assert "Switch" in message
+    assert "JSON" not in message
+
+
 def test_symbolic_reference_resolves_call_aliases_and_result_ids():
     outputs = {"toolu_abc": {"ok": True, "data": {"id": 12}}}
     assert NetBoxAgent._resolve_reference("toolu_abc.data.id", outputs) == 12

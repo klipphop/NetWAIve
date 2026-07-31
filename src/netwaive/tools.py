@@ -65,6 +65,22 @@ class NetBoxTools:
             for name, model in self.ARG_MODELS.items()
         ]
 
+    @staticmethod
+    def _friendly_error(detail: Any) -> str:
+        raw = str(detail)
+        lowered = raw.lower()
+        quoted = re.search(r"['\"]([^'\"]+)['\"]", raw)
+        name = quoted.group(1) if quoted else "demandé"
+        if "device role" in lowered or "devicerole" in lowered or "role" in lowered and "not found" in lowered:
+            return f"Le rôle d’équipement « {name} » n’existe pas encore dans NetBox. Souhaites-tu que je le crée d’abord ?"
+        if "device type" in lowered or "devicetype" in lowered:
+            return f"Le type d’équipement « {name} » est introuvable dans NetBox. Il faut le créer ou choisir un type existant avant de créer l’équipement."
+        if "site" in lowered and ("not found" in lowered or "related object" in lowered):
+            return f"Le site « {name} » est introuvable dans NetBox. Il faut le créer ou sélectionner un site existant avant de poursuivre."
+        if "related object" in lowered or "not found" in lowered:
+            return "Une dépendance NetBox requise est introuvable. Je peux la rechercher ou préparer sa création avant de reprendre l’opération."
+        return "NetBox a refusé l’opération. Vérifie les dépendances et les champs requis avant de la relancer."
+
     def execute(self, name: str, arguments: dict[str, Any]) -> ToolResult:
         model = self.ARG_MODELS.get(name)
         method = getattr(self, name, None)
@@ -76,9 +92,9 @@ class NetBoxTools:
             return ToolResult(ok=False, message=str(exc))
         except RequestError as exc:
             detail = getattr(exc, "error", None) or str(exc)
-            return ToolResult(ok=False, message=f"NetBox a refusé l’opération : {detail}")
+            return ToolResult(ok=False, message=self._friendly_error(detail))
         except Exception as exc:
-            return ToolResult(ok=False, message=f"Erreur pynetbox : {exc}")
+            return ToolResult(ok=False, message=self._friendly_error(exc))
 
     @staticmethod
     def _safe(value: Any, depth: int = 0) -> Any:

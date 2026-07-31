@@ -52,6 +52,14 @@ class NetBoxAgent:
         ))
 
     @staticmethod
+    def _is_transitional_response(content: str) -> bool:
+        return bool(re.search(
+            r"\b(compris|poursuis|continuer|automatiquement|prépare|je vais|enchaîne|understood|proceed|continue|automatically|prepare|i will)\b",
+            content,
+            re.IGNORECASE,
+        ))
+
+    @staticmethod
     def _messages(user_message: str, history: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
         messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for item in (history or [])[-16:]:
@@ -470,7 +478,7 @@ class NetBoxAgent:
         observed_records: dict[tuple[str, str], list[dict[str, Any]]] = {}
         signatures = {self._call_signature(call) for call in write_plan}
         missing_recovery_used = False
-        plan_repair_used = False
+        plan_repair_attempts = 0
 
         for _ in range(self.settings.max_agent_turns):
             response = self.client.chat.completions.create(
@@ -483,19 +491,31 @@ class NetBoxAgent:
             calls = list(assistant.tool_calls or [])
             if not calls:
                 content = assistant.content or ""
-                false_confirmation = bool(re.search(r"modifications? en attente|confirmez-vous|confirmation", content, re.IGNORECASE))
-                if require_live_plan and not write_plan and not plan_repair_used and (not collected or false_confirmation):
+                false_confirmation = bool(re.search(r"modifications? en attente|confirmez-vous|confirmation|pending changes|do you approve", content, re.IGNORECASE))
+                transitional_response = self._is_transitional_response(content)
+                needs_tool_chain = require_live_plan and not write_plan and (
+                    not collected or false_confirmation or transitional_response
+                )
+                if needs_tool_chain and plan_repair_attempts < 3:
                     messages.append(assistant.model_dump(exclude_none=True))
                     messages.append({
                         "role": "user",
                         "content": (
-                            "Demande de mutation détectée : ne produis pas une confirmation en prose sans plan réel. "
-                            "Exécute d’abord les netbox_read nécessaires. Si les objets existent déjà, réponds qu’ils sont tous en place ; "
-                            "sinon prépare les netbox_write et laisse le runtime rendre la confirmation."
+                            "Demande de mutation claire : ne réponds jamais par un accusé de réception ou une transition textuelle. "
+                            "Dans cette même boucle, appelle immédiatement les netbox_read nécessaires, puis prépare les netbox_write si l’action est requise. "
+                            "Le runtime affichera lui-même la carte de confirmation uniquement lorsqu’un pending_write réel existe. "
+                            "Si un prérequis manque réellement, pose une question précise ; sinon poursuis avec les outils maintenant."
                         ),
                     })
-                    plan_repair_used = True
+                    plan_repair_attempts += 1
                     continue
+                if needs_tool_chain:
+                    message = (
+                        "The agent did not produce the required NetBox tool chain; no change was planned or executed."
+                        if language == "en"
+                        else "L’agent n’a pas produit le chaînage d’outils NetBox requis ; aucune modification n’a été planifiée ni exécutée."
+                    )
+                    return AgentResponse(message=message, tool_results=collected)
                 last_failure = next((item for item in reversed(collected) if not item.ok), None)
                 missing_dependency = bool(
                     last_failure

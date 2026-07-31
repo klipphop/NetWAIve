@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.13] - 2026-07-30
+
+### Fixed
+- Prevented intermediate acknowledgement messages from ending a clear NetBox mutation request before its read/write tool chain and pending confirmation are produced.
+- Added bounded same-cycle retries for transitional LLM responses, without exposing them to the user interface.
+
 ## [0.3.12] - 2026-07-30
 
 ### Fixed

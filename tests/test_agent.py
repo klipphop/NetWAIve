@@ -122,6 +122,29 @@ def test_write_request_cannot_return_a_prose_confirmation_without_live_plan():
     assert len(client.calls) == 3
 
 
+def test_transitional_text_is_not_returned_before_tool_chain_and_pending_plan():
+    read_prefix = tool_call("netbox_read", {
+        "app": "ipam", "endpoint": "prefixes", "method": "filter", "kwargs": {"prefix": "10.50.0.0/24"}
+    }, "read-prefix")
+    write_prefix = tool_call("netbox_write", {
+        "app": "ipam", "endpoint": "prefixes", "action": "create", "data": {"prefix": "10.50.0.0/24"}
+    }, "create-prefix")
+    client = FakeClient([
+        Message("Compris. Je poursuis automatiquement la création."),
+        Message("Je prépare les actions nécessaires."),
+        Message(tool_calls=[read_prefix]),
+        Message(tool_calls=[write_prefix]),
+        Message("Plan prêt."),
+    ])
+    result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run(
+        "ajouter un subnet 10.50.0.0/24 et l’affecter au vlan 500"
+    )
+    assert len(client.calls) == 5
+    assert len(result.pending_confirmation) == 1
+    assert "Création du préfixe" in result.message
+    assert "Compris" not in result.message
+
+
 def test_universal_write_requires_confirmation():
     call = tool_call("netbox_write", {
         "app": "dcim", "endpoint": "devices", "action": "create", "data": {"name": "sw-02"}

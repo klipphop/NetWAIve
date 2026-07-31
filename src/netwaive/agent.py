@@ -728,7 +728,13 @@ class NetBoxAgent:
                 results.append(ToolResult(ok=False, message=str(exc)))
                 failed_call = call
                 break
-            result = self.tools.execute(call.name, arguments)
+            existing = None
+            if call.name == "netbox_write" and str(arguments.get("action") or "").lower() == "create":
+                try:
+                    existing = self.tools.find_existing_create(arguments)
+                except Exception:
+                    existing = None
+            result = existing or self.tools.execute(call.name, arguments)
             results.append(result)
             outputs[call.id] = result.model_dump()
             if not result.ok:

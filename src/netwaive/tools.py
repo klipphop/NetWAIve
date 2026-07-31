@@ -230,12 +230,43 @@ class NetBoxTools:
             data=data,
         )
 
+    def find_existing_create(self, arguments: dict[str, Any]) -> ToolResult | None:
+        """Live idempotence guard for every generic create before the API mutation."""
+        args = NetBoxWriteArgs.model_validate(arguments)
+        if args.action != "create":
+            return None
+        endpoint, _, _, _ = self._resolve_endpoint(args.app, args.endpoint)
+        data = dict(args.data)
+        identities = {key: data[key] for key in ("name", "slug", "prefix", "address", "vid", "model") if data.get(key) not in (None, "")}
+        if not identities:
+            return None
+        try:
+            records = list(islice(endpoint.filter(limit=5, **identities), 5))
+        except Exception:
+            return None
+        if not records:
+            return None
+        record = self._safe(records[0])
+        return ToolResult(ok=True, message="Objet existant réutilisé.", data=record)
+
     def netbox_write(self, args: NetBoxWriteArgs) -> ToolResult:
         """Écriture universelle create/update/delete sur n'importe quel endpoint NetBox."""
         endpoint, app_name, plugin, actual = self._resolve_endpoint(args.app, args.endpoint)
         if endpoint is None:
             raise NetBoxChatError("Une ressource précise du plugin est obligatoire pour une écriture.")
         data = dict(args.data)
+        if args.action == "create" and self._normalize(args.app) == "dcim" and self._normalize(args.endpoint) in {"devices", "device"} and any(key in data for key in ("site", "role", "device_type", "manufacturer")):
+            relations = {"site": (self.api.dcim.sites, "site"), "role": (self.api.dcim.device_roles, "rôle d’équipement"), "device_type": (self.api.dcim.device_types, "type d’équipement"), "manufacturer": (self.api.dcim.manufacturers, "fabricant")}
+            for field, (relation_endpoint, label) in relations.items():
+                value = data.get(field)
+                if not isinstance(value, str) or value.strip().lower() == field:
+                    if isinstance(value, str):
+                        raise ObjectNotFound(f"Le {label} demandé est absent ou invalide dans NetBox.")
+                    continue
+                record = relation_endpoint.get(slug=value) or relation_endpoint.get(name=value)
+                if record is None:
+                    raise ObjectNotFound(f"Le {label} « {value} » n’existe pas encore dans NetBox. Souhaites-tu que je le crée d’abord ?")
+                data[field] = record.id
 
         if args.action == "create":
             record = endpoint.create(data)

@@ -429,13 +429,27 @@ class NetBoxAgent:
     @staticmethod
     def _resolve_reference(expression: str, outputs: dict[str, dict[str, Any]]) -> Any:
         parts = expression.split(".")
-        if not parts or parts[0] not in outputs:
+        if not parts:
             raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
-        current: Any = outputs[parts[0]]
+        key = parts[0]
+        if key not in outputs:
+            alias = re.fullmatch(r"call_(\d+)", key)
+            if alias:
+                index = int(alias.group(1)) - 1
+                keys = list(outputs)
+                if 0 <= index < len(keys):
+                    key = keys[index]
+        if key not in outputs:
+            raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
+        current: Any = outputs[key]
         for part in parts[1:]:
-            if not isinstance(current, dict) or part not in current:
-                raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
-            current = current[part]
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+                continue
+            if part == "id" and isinstance(current, dict) and isinstance(current.get("data"), dict) and "id" in current["data"]:
+                current = current["data"]["id"]
+                continue
+            raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
         return current
 
     @classmethod

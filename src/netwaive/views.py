@@ -100,7 +100,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 
 @login_required
 def chat(request):
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.16"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.3.17"})
 
 
 @login_required
@@ -147,6 +147,10 @@ def chat_api(request):
     approved = bool(body.get("approve_pending"))
     execution_status = "none"
 
+    if pending and not (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide", "non", "n", "annule", "annuler"}):
+        active["pending_write"] = None
+        pending = None
+
     if pending and normalized in {"non", "n", "annule", "annuler"}:
         active["pending_write"] = None
         execution_status = "cancelled"
@@ -161,7 +165,7 @@ def chat_api(request):
             result = agent.confirm(str(pending.get("message") or ""), calls, history=pending_history)
             answer = result.message
             execution_status = "success" if len(result.tool_results) == len(calls) and all(item.ok for item in result.tool_results) else "failed"
-            if result.pending_confirmation:
+            if execution_status == "success" and result.pending_confirmation:
                 active["pending_write"] = {
                     "message": str(pending.get("message") or ""),
                     "calls": [item.model_dump() for item in result.pending_confirmation],

@@ -89,6 +89,13 @@ def tool_call(name, arguments, call_id="call-1"):
     )
 
 
+def test_symbolic_reference_resolves_call_aliases_and_result_ids():
+    outputs = {"toolu_abc": {"ok": True, "data": {"id": 12}}}
+    assert NetBoxAgent._resolve_reference("toolu_abc.data.id", outputs) == 12
+    assert NetBoxAgent._resolve_reference("toolu_abc.id", outputs) == 12
+    assert NetBoxAgent._resolve_reference("call_1.data.id", outputs) == 12
+
+
 def test_parent_dependencies_are_ordered_before_device_creation():
     manufacturer = PendingToolCall(id="manufacturer", name="netbox_write", arguments={"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name":"Acme"}})
     device_type = PendingToolCall(id="type", name="netbox_write", arguments={"app":"dcim","endpoint":"device-types","action":"create","data":{"model":"X1","manufacturer":"${manufacturer.data.id}"}})

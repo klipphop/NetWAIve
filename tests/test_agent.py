@@ -190,13 +190,15 @@ def test_preflight_collision_stops_a_pending_write():
 def test_dtl_read_loads_official_template_without_netbox_mutation(monkeypatch):
     class Response:
         status_code = 200
+        ok = True
         text = "manufacturer: Cisco\nmodel: Catalyst 9300-48P\ninterfaces:\n  - name: GigabitEthernet1/0/1\n"
         def raise_for_status(self): pass
+        def json(self): return {"default_branch": "master"}
     monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: Response())
     result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer":"Cisco", "model":"C9300-48P"}))
     assert result.ok and result.data["device_type"]["model"] == "Catalyst 9300-48P"
     assert result.data["component_templates"]["interfaces"][0]["name"] == "GigabitEthernet1/0/1"
-    assert "/main/device-types/" in result.data["source"]
+    assert "/master/device-types/" in result.data["source"]
     plan = result.data["import_plan"]
     assert plan[1]["arguments"]["data"]["slug"] == "c9300-48p"
     assert plan[1]["arguments"]["data"]["u_height"] == 1
@@ -205,10 +207,10 @@ def test_dtl_read_loads_official_template_without_netbox_mutation(monkeypatch):
 
 def test_dtl_directory_search_returns_c9200_candidates(monkeypatch):
     class Response:
-        def __init__(self, status_code, payload=None): self.status_code, self.payload = status_code, payload or []
+        def __init__(self, status_code, payload=None): self.status_code, self.payload, self.ok = status_code, payload or [], status_code < 400
         def raise_for_status(self): pass
         def json(self): return self.payload
-    replies = iter([Response(404), Response(200, [{"type":"file","name":"C9200-24T.yaml"}, {"type":"file","name":"C9200-48P.yaml"}])])
+    replies = iter([Response(200, {"default_branch":"master"}), Response(404), Response(200, [{"type":"file","name":"C9200-24T.yaml"}, {"type":"file","name":"C9200-48P.yaml"}])])
     monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: next(replies))
     result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer":"Cisco", "model":"Catalyst 9200"}))
     assert result.ok and result.data["candidates"] == ["C9200-24T", "C9200-48P"]

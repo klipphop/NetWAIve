@@ -191,10 +191,13 @@ class NetBoxTools:
         model = str(query.get("model") or query.get("slug") or "").strip()
         if not manufacturer or not model:
             raise NetBoxChatError("DTL exige manufacturer et model (ou slug).")
-        source = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/main/device-types/{manufacturer}/{model}.yaml"
+        repo_api = "https://api.github.com/repos/netbox-community/devicetype-library"
+        repo_response = requests.get(repo_api, timeout=15)
+        branch = repo_response.json().get("default_branch", "main") if repo_response.ok else "main"
+        source = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/{branch}/device-types/{manufacturer}/{model}.yaml"
         response = requests.get(source, timeout=15)
         if response.status_code == 404:
-            index_url = f"https://api.github.com/repos/netbox-community/devicetype-library/contents/device-types/{manufacturer}?ref=main"
+            index_url = f"https://api.github.com/repos/netbox-community/devicetype-library/contents/device-types/{manufacturer}?ref={branch}"
             listing = requests.get(index_url, timeout=15)
             listing.raise_for_status()
             tokens = [token for token in re.sub(r"(?i)catalyst", "", model).upper().replace("-", " ").split() if token]
@@ -213,7 +216,7 @@ class NetBoxTools:
             {"id": "dtl-manufacturer", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": "manufacturers", "action": "create", "data": {"name": template.get("manufacturer")}}},
             {"id": "dtl-device-type", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": "device-types", "action": "create", "data": {**device_type, "manufacturer": "${dtl-manufacturer.data.id}"}}},
         ]
-        endpoint_map = {"interfaces": "interface-templates", "power-ports": "power-port-templates", "console-ports": "console-port-templates"}
+        endpoint_map = {"interfaces": "interface-templates", "power-ports": "power-port-templates", "console-ports": "console-port-templates", "module-bays": "module-bay-templates"}
         for collection, endpoint_name in endpoint_map.items():
             for index, component in enumerate(components.get(collection, []), start=1):
                 if isinstance(component, dict):

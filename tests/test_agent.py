@@ -197,6 +197,10 @@ def test_dtl_read_loads_official_template_without_netbox_mutation(monkeypatch):
     assert result.ok and result.data["device_type"]["model"] == "Catalyst 9300-48P"
     assert result.data["component_templates"]["interfaces"][0]["name"] == "GigabitEthernet1/0/1"
     assert "/main/device-types/" in result.data["source"]
+    plan = result.data["import_plan"]
+    assert plan[1]["arguments"]["data"]["slug"] == "c9300-48p"
+    assert plan[1]["arguments"]["data"]["u_height"] == 1
+    assert plan[2]["arguments"]["endpoint"] == "interface-templates"
 
 
 def test_only_three_universal_tools_are_exposed():

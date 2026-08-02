@@ -201,7 +201,19 @@ class NetBoxTools:
             raise NetBoxChatError("Template DTL invalide.")
         components = {key: value for key, value in template.items() if isinstance(value, list) and key not in {"tags"}}
         device_type = {key: value for key, value in template.items() if key not in components and key not in {"manufacturer"}}
-        return ToolResult(ok=True, message=f"Template DTL officiel chargé : {template.get('manufacturer')} {template.get('model')}.", data={"source": source, "manufacturer": template.get("manufacturer"), "device_type": device_type, "component_templates": components, "template": template})
+        slug = re.sub(r"[^a-z0-9]+", "-", str(device_type.get("slug") or model).lower()).strip("-")
+        device_type["slug"] = slug
+        device_type["u_height"] = device_type.get("u_height") or 1
+        import_plan = [
+            {"id": "dtl-manufacturer", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": "manufacturers", "action": "create", "data": {"name": template.get("manufacturer")}}},
+            {"id": "dtl-device-type", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": "device-types", "action": "create", "data": {**device_type, "manufacturer": "${dtl-manufacturer.data.id}"}}},
+        ]
+        endpoint_map = {"interfaces": "interface-templates", "power-ports": "power-port-templates", "console-ports": "console-port-templates"}
+        for collection, endpoint_name in endpoint_map.items():
+            for index, component in enumerate(components.get(collection, []), start=1):
+                if isinstance(component, dict):
+                    import_plan.append({"id": f"dtl-{collection}-{index}", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": endpoint_name, "action": "create", "data": {**component, "device_type": "${dtl-device-type.data.id}"}}})
+        return ToolResult(ok=True, message=f"Template DTL officiel chargé : {template.get('manufacturer')} {template.get('model')}.", data={"source": source, "manufacturer": template.get("manufacturer"), "device_type": device_type, "component_templates": components, "import_plan": import_plan, "template": template})
 
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""
@@ -406,7 +418,8 @@ class NetBoxTools:
             media = content.get("application/json") or next(iter(content.values()), {})
             raw_schema = media.get("schema", {}) if isinstance(media, dict) else {}
             schema = self._deref(raw_schema, spec)
-            required = sorted(set(required + list(schema.get("required", []))))
+            if method == "post":
+                required = sorted(set(required + list(schema.get("required", []))))
             for name, field in schema.get("properties", {}).items():
                 resolved = self._deref(field, spec) if isinstance(field, dict) else {}
                 writable[name] = {

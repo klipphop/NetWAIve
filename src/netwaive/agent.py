@@ -548,7 +548,7 @@ class NetBoxAgent:
                     result = self.tools.execute(call.function.name, arguments)
                     collected.append(result)
                     tool_outputs[call.id] = result.model_dump()
-                    if call.function.name == "netbox_read" and self.tools._normalize(str(arguments.get("app") or "")) == "dtl" and isinstance(result.data, dict):
+                    if call.function.name == "netbox_read" and str(arguments.get("app") or "").strip().lower() == "dtl" and isinstance(result.data, dict):
                         for item in result.data.get("import_plan", []):
                             pending_call = PendingToolCall.model_validate(item)
                             signature = self._call_signature(pending_call)

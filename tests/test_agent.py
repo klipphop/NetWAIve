@@ -203,6 +203,17 @@ def test_dtl_read_loads_official_template_without_netbox_mutation(monkeypatch):
     assert plan[2]["arguments"]["endpoint"] == "interface-templates"
 
 
+def test_dtl_directory_search_returns_c9200_candidates(monkeypatch):
+    class Response:
+        def __init__(self, status_code, payload=None): self.status_code, self.payload = status_code, payload or []
+        def raise_for_status(self): pass
+        def json(self): return self.payload
+    replies = iter([Response(404), Response(200, [{"type":"file","name":"C9200-24T.yaml"}, {"type":"file","name":"C9200-48P.yaml"}])])
+    monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: next(replies))
+    result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer":"Cisco", "model":"Catalyst 9200"}))
+    assert result.ok and result.data["candidates"] == ["C9200-24T", "C9200-48P"]
+
+
 def test_only_three_universal_tools_are_exposed():
     assert set(FakeTools.ARG_MODELS) == {"netbox_read", "netbox_write", "get_endpoint_schema"}
 

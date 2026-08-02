@@ -194,7 +194,12 @@ class NetBoxTools:
         source = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/main/device-types/{manufacturer}/{model}.yaml"
         response = requests.get(source, timeout=15)
         if response.status_code == 404:
-            raise ObjectNotFound(f"Modèle DTL absent : {manufacturer}/{model}.")
+            index_url = f"https://api.github.com/repos/netbox-community/devicetype-library/contents/device-types/{manufacturer}?ref=main"
+            listing = requests.get(index_url, timeout=15)
+            listing.raise_for_status()
+            tokens = [token for token in re.sub(r"(?i)catalyst", "", model).upper().replace("-", " ").split() if token]
+            candidates = [item.get("name", "")[:-5] for item in listing.json() if item.get("type") == "file" and item.get("name", "").endswith(".yaml") and all(token in item.get("name", "").upper() for token in tokens)]
+            return ToolResult(ok=True, message=f"Modèle DTL exact absent. Références disponibles pour {manufacturer} : " + ", ".join(candidates[:20]), data={"manufacturer": manufacturer, "query": model, "candidates": candidates[:20], "source": index_url})
         response.raise_for_status()
         template = yaml.safe_load(response.text)
         if not isinstance(template, dict):

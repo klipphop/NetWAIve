@@ -1,9 +1,30 @@
+import re
+import unicodedata
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+try:
+    from django.utils.text import slugify as _slugify
+except ImportError:  # Permet les tests/outils hors du runtime NetBox.
+    def _slugify(value: str, *, allow_unicode: bool = False) -> str:
+        normalized = unicodedata.normalize("NFKC" if allow_unicode else "NFKD", value)
+        if not allow_unicode:
+            normalized = normalized.encode("ascii", "ignore").decode("ascii")
+        normalized = re.sub(r"[^\w\s-]", "", normalized.lower())
+        return re.sub(r"[-\s]+", "-", normalized).strip("-_")
+
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+def netbox_slug(value: Any) -> str:
+    slug = _slugify(str(value or ""), allow_unicode=False).strip("-_")
+    if not slug:
+        raise ValueError("Impossible de générer un slug NetBox non vide.")
+    return slug
+
+
 NDX_OBJECT_CONFIG = {
     "device-type": {
         "endpoint": "device-types",

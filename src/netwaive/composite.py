@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from .models import NDX_COMPONENT_ENDPOINTS, NDX_COMPONENT_RELATIONS, NDXImportPayload, NDX_OBJECT_CONFIG, ToolResult
+from .models import NDX_COMPONENT_ENDPOINTS, NDX_COMPONENT_RELATIONS, NDXImportPayload, NDX_OBJECT_CONFIG, ToolResult, netbox_slug
 
 
 class NDXCompositeImporter:
@@ -31,7 +31,11 @@ class NDXCompositeImporter:
         if config["requires_interfaces"] and payload.interface_count() == 0:
             return ToolResult(ok=False, message="Import NDX refusé : la spec ne contient aucune interface.", data={"reason": "empty_interface_templates"})
 
-        manufacturer = self._create_or_reuse("manufacturers", {"name": payload.manufacturer})
+        try:
+            manufacturer_data = {"name": payload.manufacturer, "slug": netbox_slug(payload.manufacturer)}
+        except ValueError as exc:
+            return ToolResult(ok=False, message=f"Import NDX refusé : {exc}", data={"reason": "invalid_manufacturer_slug"})
+        manufacturer = self._create_or_reuse("manufacturers", manufacturer_data)
         if not manufacturer.ok:
             return manufacturer
         manufacturer_id = manufacturer.data.get("id") if isinstance(manufacturer.data, dict) else None
@@ -39,6 +43,12 @@ class NDXCompositeImporter:
             return ToolResult(ok=False, message="Import NDX interrompu : le fabricant n’a retourné aucun identifiant.")
 
         parent_data = payload.parent.model_dump(exclude={"front_image", "rear_image"}, exclude_none=True)
+        try:
+            parent_data["slug"] = netbox_slug(parent_data.get("slug") or parent_data.get("model"))
+        except ValueError as exc:
+            return ToolResult(ok=False, message=f"Import NDX refusé : {exc}", data={"reason": "invalid_parent_slug"})
+        if payload.object_type == "module-type":
+            parent_data.pop("slug", None)
         parent_data["manufacturer"] = manufacturer_id
         parent = self._create_or_reuse(config["endpoint"], parent_data)
         if not parent.ok:

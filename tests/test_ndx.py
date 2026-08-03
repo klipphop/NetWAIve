@@ -179,6 +179,7 @@ def test_module_type_import_is_complete_and_auto_includes_manufacturer():
     payload = NDXConnector(ModuleSession()).build_payload("PSU-1000", object_type="module-type")
     assert payload["object_type"] == "module-type"
     assert payload["parent"]["part_number"] == "P-1000"
+    assert payload["parent"]["slug"] == "psu-1000"
     assert payload["parent"]["airflow"] == "front-to-rear"
     assert len(payload["component_templates"]["power-ports"]) == 1
 
@@ -298,6 +299,25 @@ def test_composite_resolves_component_dependencies_before_writes():
     assert result.ok
     assert [item["endpoint"] for item in writes] == ["manufacturers", "device-types", "interface-templates", "rear-port-templates", "front-port-templates"]
     assert writes[-1]["data"]["rear_port"] == 4
+
+
+def test_composite_generates_required_slugs_for_manufacturer_and_device_type():
+    writes = []
+    def execute(name, arguments):
+        writes.append(arguments)
+        return ToolResult(ok=True, message="ok", data={"id": len(writes)})
+    payload = {
+        "object_type":"device-type",
+        "manufacturer":"Cisco Systems, Inc.",
+        "parent":{"model":"Catalyst 9200-24P"},
+        "component_templates":{"interfaces":[{"name":"GigabitEthernet1/0/1","type":"1000base-t"}]},
+    }
+    result = NDXCompositeImporter(lambda arguments: None, execute).run(payload)
+    assert result.ok
+    assert writes[0]["endpoint"] == "manufacturers"
+    assert writes[0]["data"]["slug"] == "cisco-systems-inc"
+    assert writes[1]["endpoint"] == "device-types"
+    assert writes[1]["data"]["slug"] == "catalyst-9200-24p"
 
 
 def test_runtime_contains_no_vendor_specific_rules():

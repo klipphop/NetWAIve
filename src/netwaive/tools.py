@@ -190,7 +190,19 @@ class NetBoxTools:
     def _read_ndx(self, args: NetBoxReadArgs) -> ToolResult:
         query = args.merged_kwargs()
         text = query.get("query") or query.get("model") or query.get("part_number")
-        matches = self.ndx.search(text)
+        matches = self.ndx.search(text) or []
+        exact_types = [
+            object_type
+            for object_type in NDX_OBJECT_CONFIG
+            if self.ndx.exact(text, matches, object_type=object_type) is not None
+        ]
+        if len(exact_types) == 1:
+            return self._read_ndx_spec(NetBoxReadArgs(
+                app="ndx",
+                endpoint="spec",
+                method="get",
+                kwargs={"model": str(text or ""), "object_type": exact_types[0]},
+            ))
         return ToolResult(ok=True, message=f"NDX : {len(matches)} correspondance(s).", data={"source":"ndx", "query":str(text or ""), "candidates":matches[:50]})
 
     def _read_ndx_spec(self, args: NetBoxReadArgs) -> ToolResult:

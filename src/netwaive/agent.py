@@ -580,6 +580,14 @@ class NetBoxAgent:
                         if signature not in signatures:
                             write_plan.append(pending_call)
                             signatures.add(signature)
+                        write_plan, sanitation_errors = self._sanitize_plan(write_plan)
+                        if sanitation_errors:
+                            return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
+                        return AgentResponse(
+                            message=self._pending_message(write_plan, tool_outputs, language),
+                            pending_confirmation=write_plan,
+                            tool_results=collected,
+                        )
                     if call.function.name == "netbox_read":
                         read_targets.add(self._target_key(arguments))
                         if result.ok:

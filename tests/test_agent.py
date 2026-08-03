@@ -193,10 +193,12 @@ def test_ndx_catalog_search_returns_exact_candidate(monkeypatch):
         ok = True
         def raise_for_status(self): pass
         def json(self):
-            return [{"vendor_name":"Cisco Systems","manufacturer":"Cisco","model":"Catalyst 9300-24P","part_number":"C9300-24P","slug":"cisco-c9300-24p","type":"device-type"}]
+            return [{"vendor_name":"Cisco Systems","manufacturer":"Cisco","model":"Catalyst 9300-24P","part_number":"C9300-24P","slug":"cisco-c9300-24p","type":"device-type","component_templates":{"interfaces":[{"name":"GigabitEthernet1/0/1","type":"1000base-t"}]}}]
     monkeypatch.setattr("netwaive.ndx.requests.get", lambda url, timeout: Response())
     result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query":"C9300-24P"}))
-    assert result.ok and result.data["candidates"][0]["part_number"] == "C9300-24P"
+    assert result.ok
+    assert result.data["parent"]["model"] == "Catalyst 9300-24P"
+    assert result.data["parent"]["slug"] == "cisco-c9300-24p"
 
 
 def test_ndx_catalog_search_returns_ambiguous_candidates(monkeypatch):
@@ -227,7 +229,9 @@ def test_composite_ndx_import_is_one_pending_action_and_executes_all_templates()
             assert len(payload["component_templates"]["interfaces"]) == 27
             return ToolResult(ok=True, message="Import NDX terminé", data={"templates_processed":27})
     read = tool_call("netbox_read", {"app":"ndx","endpoint":"spec","method":"get","kwargs":{"model":"C9300-24P"}}, "ndx-read")
-    result = NetBoxAgent(settings(), tools=CompositeTools(), client=FakeClient([Message(tool_calls=[read]), Message("Plan prêt")])).run("Importe C9300-24P depuis NDX")
+    client = FakeClient([Message(tool_calls=[read])])
+    result = NetBoxAgent(settings(), tools=CompositeTools(), client=client).run("Importe C9300-24P depuis NDX")
+    assert len(client.calls) == 1
     assert len(result.pending_confirmation) == 1
     assert result.pending_confirmation[0].name == "import_ndx_object"
     assert "Import NDX" in result.message

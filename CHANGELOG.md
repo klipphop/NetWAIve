@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.15] - 2026-08-03
+
+### Fixed
+- Generate validated NetBox slugs for NDX Manufacturers and DeviceTypes when source specifications omit them.
+- Preserve a normalized slug in ModuleType DTOs while omitting the unsupported field from NetBox ModuleType writes.
+- Resolve exact NDX catalogue matches directly to complete specifications instead of returning an intermediate variant-selection step.
+
+### Changed
+- Return the complete composite Pending confirmation card immediately after an exact NDX specification is loaded, removing an unnecessary extra LLM turn.
+
+### Tests
+- Added slug fallback coverage for Manufacturer, DeviceType, and ModuleType payloads.
+- Validated a live Cisco Catalyst 9200-24P import with 34 templates and a duplicate-free idempotent retry.
+
 ## [0.4.14] - 2026-08-03
 
 ### Fixed

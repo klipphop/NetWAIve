@@ -8,7 +8,7 @@ import requests
 import yaml
 
 from .errors import NetBoxChatError
-from .models import NDX_COMPONENT_ENDPOINTS, NDX_OBJECT_CONFIG
+from .models import NDX_COMPONENT_ENDPOINTS, NDX_OBJECT_CONFIG, netbox_slug
 
 
 class NDXConnector:
@@ -170,11 +170,10 @@ class NDXConnector:
         merged = {**item, **raw}
         parent = {key: merged.get(key) for key in self.PARENT_FIELDS if merged.get(key) is not None}
         parent["model"] = parent.get("model") or item.get("model") or item.get("part_number")
+        parent["slug"] = netbox_slug(parent.get("slug") or parent["model"])
         if object_type == "device-type":
-            parent["slug"] = parent.get("slug") or re.sub(r"[^a-z0-9]+", "-", str(parent["model"]).casefold()).strip("-")
             parent["u_height"] = parent.get("u_height") or 1
         else:
-            parent.pop("slug", None)
             parent.pop("u_height", None)
             parent.pop("front_image", None)
             parent.pop("rear_image", None)

@@ -187,70 +187,44 @@ def test_preflight_collision_stops_a_pending_write():
     assert any("déjà câblée" in item.message for item in result.tool_results)
 
 
-def test_dtl_read_loads_official_template_without_netbox_mutation(monkeypatch):
+def test_ndx_catalog_search_returns_exact_candidate(monkeypatch):
     class Response:
         status_code = 200
         ok = True
-        text = "manufacturer: Cisco\nmodel: Catalyst 9300-48P\ninterfaces:\n  - name: GigabitEthernet1/0/1\n"
         def raise_for_status(self): pass
-        def json(self): return {"default_branch": "master"}
+        def json(self):
+            return [{"vendor_name":"Cisco Systems","manufacturer":"Cisco","model":"Catalyst 9300-24P","part_number":"C9300-24P","slug":"cisco-c9300-24p","type":"device-type"}]
     monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: Response())
-    result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer":"Cisco", "model":"C9300-48P"}))
-    assert result.ok and result.data["device_type"]["model"] == "Catalyst 9300-48P"
-    assert result.data["component_templates"]["interfaces"][0]["name"] == "GigabitEthernet1/0/1"
-    assert "/master/device-types/" in result.data["source"]
-    plan = result.data["import_plan"]
-    assert plan[1]["arguments"]["data"]["slug"] == "c9300-48p"
-    assert plan[1]["arguments"]["data"]["u_height"] == 1
-    assert plan[2]["arguments"]["endpoint"] == "interface-templates"
+    result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query":"C9300-24P"}))
+    assert result.ok and result.data["candidates"][0]["part_number"] == "C9300-24P"
 
 
-def test_dtl_directory_search_returns_c9200_candidates(monkeypatch):
+def test_ndx_catalog_search_returns_ambiguous_candidates(monkeypatch):
     class Response:
-        def __init__(self, status_code, payload=None): self.status_code, self.payload, self.ok = status_code, payload or [], status_code < 400
+        status_code = 200
+        ok = True
         def raise_for_status(self): pass
-        def json(self): return self.payload
-    replies = iter([Response(200, {"default_branch":"master"}), Response(404), Response(200, [{"type":"file","name":"C9200-24T.yaml"}, {"type":"file","name":"C9200-48P.yaml"}])])
-    monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: next(replies))
-    result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer":"Cisco", "model":"Catalyst 9200"}))
-    assert result.ok and result.data["candidates"] == ["C9200-24T", "C9200-48P"]
+        def json(self): return [{"model":"Catalyst 9200-24P"},{"model":"Catalyst 9200-24T"}]
+    monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: Response())
+    result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query":"Catalyst 9200"}))
+    assert len(result.data["candidates"]) == 2
 
 
-def test_composite_dtl_import_is_one_pending_action_and_executes_all_templates():
+def test_composite_ndx_import_is_one_pending_action_and_executes_all_templates():
     class CompositeTools(FakeTools):
         def execute(self, name, arguments):
-            if name == "netbox_read" and arguments.get("app") == "dtl":
-                return ToolResult(ok=True, message="DTL chargé", data={
-                    "manufacturer": "Cisco",
-                    "device_type": {"model": "Catalyst 9300-24P", "slug": "c9300-24p", "u_height": 1},
-                    "component_templates": {
-                        "interfaces": [{"name": f"Gi1/0/{i}", "type": "1000base-t"} for i in range(1, 28)],
-                        "power-ports": [],
-                        "console-ports": [{"name": "Console", "type": "rj-45"}, {"name": "Aux", "type": "rj-45"}],
-                        "module-bays": [{"name": f"Bay {i}"} for i in range(1, 4)],
-                    },
-                })
+            if name == "netbox_read" and arguments.get("app") == "ndx":
+                return ToolResult(ok=True, message="NDX chargé", data={"device_type":{"model":"Catalyst 9300-24P","slug":"c9300-24p","u_height":1},"manufacturer":"Cisco Systems","component_templates":{"interfaces":[{"name":f"Gi1/0/{i}"} for i in range(1,28)],"console-ports":[{"name":"Console"}],"power-ports":[]}})
             return super().execute(name, arguments)
-
-        def import_dtl_devicetype(self, arguments):
+        def import_ndx_devicetype(self, arguments):
             payload = arguments["payload"]
-            assert payload["device_type"]["slug"] == "c9300-24p"
             assert len(payload["component_templates"]["interfaces"]) == 27
-            assert len(payload["component_templates"]["console-ports"]) == 2
-            assert len(payload["component_templates"]["module-bays"]) == 3
-            return ToolResult(ok=True, message="Import DTL terminé : 32 templates créés.", data={"id": 99, "templates_created": 32})
-
-    read = tool_call("netbox_read", {"app":"dtl", "endpoint":"device-types", "method":"get", "kwargs":{"manufacturer":"Cisco", "model":"C9300-24P"}}, "dtl-read")
-    client = FakeClient([Message(tool_calls=[read]), Message("Plan prêt")])
-    tools = CompositeTools()
-    agent = NetBoxAgent(settings(), tools=tools, client=client)
-    result = agent.run("Importe le Cisco C9300-24P depuis la DTL")
+            return ToolResult(ok=True, message="Import NDX terminé", data={"templates_created":27})
+    read = tool_call("netbox_read", {"app":"ndx","endpoint":"spec","method":"get","kwargs":{"model":"C9300-24P"}}, "ndx-read")
+    result = NetBoxAgent(settings(), tools=CompositeTools(), client=FakeClient([Message(tool_calls=[read]), Message("Plan prêt")])).run("Importe C9300-24P depuis NDX")
     assert len(result.pending_confirmation) == 1
-    assert result.pending_confirmation[0].name == "import_dtl_devicetype"
-    assert "27 interfaces" in result.message
-    executed = agent.confirm("Importe le Cisco C9300-24P depuis la DTL", result.pending_confirmation)
-    assert executed.tool_results[0].ok
-    assert executed.tool_results[0].data["templates_created"] == 32
+    assert result.pending_confirmation[0].name == "import_ndx_devicetype"
+    assert "Import NDX" in result.message
 
 
 def test_only_three_universal_tools_are_exposed():

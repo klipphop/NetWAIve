@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import requests
-import yaml
 import re
 from itertools import islice
 from typing import Any
@@ -195,51 +194,24 @@ class NetBoxTools:
         matches = [item for item in records if any(text in str(item.get(field) or "").casefold() for field in ("model", "part_number", "manufacturer", "vendor_name", "slug"))]
         return ToolResult(ok=True, message=f"NDX : {len(matches)} correspondance(s).", data={"source":"ndx", "query":text, "candidates":matches[:50]})
 
-    def _read_dtl(self, args: NetBoxReadArgs) -> ToolResult:
-        """Read an official Device Type Library YAML template; it never mutates NetBox."""
+    def _read_ndx_spec(self, args: NetBoxReadArgs) -> ToolResult:
         query = args.merged_kwargs()
-        manufacturer = str(query.get("manufacturer") or "").strip()
-        model = str(query.get("model") or query.get("slug") or "").strip()
-        if not manufacturer or not model:
-            raise NetBoxChatError("DTL exige manufacturer et model (ou slug).")
-        repo_api = "https://api.github.com/repos/netbox-community/devicetype-library"
-        repo_response = requests.get(repo_api, timeout=15)
-        branch = repo_response.json().get("default_branch", "main") if repo_response.ok else "main"
-        source = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/{branch}/device-types/{manufacturer}/{model}.yaml"
-        response = requests.get(source, timeout=15)
-        if response.status_code == 404:
-            index_url = f"https://api.github.com/repos/netbox-community/devicetype-library/contents/device-types/{manufacturer}?ref={branch}"
-            listing = requests.get(index_url, timeout=15)
-            listing.raise_for_status()
-            tokens = [token for token in re.sub(r"(?i)catalyst", "", model).upper().replace("-", " ").split() if token]
-            candidates = [item.get("name", "")[:-5] for item in listing.json() if item.get("type") == "file" and item.get("name", "").endswith(".yaml") and all(token in item.get("name", "").upper() for token in tokens)]
-            return ToolResult(ok=True, message=f"Modèle DTL exact absent. Références disponibles pour {manufacturer} : " + ", ".join(candidates[:20]), data={"manufacturer": manufacturer, "query": model, "candidates": candidates[:20], "source": index_url})
-        response.raise_for_status()
-        template = yaml.safe_load(response.text)
-        if not isinstance(template, dict):
-            raise NetBoxChatError("Template DTL invalide.")
-        components = {key: value for key, value in template.items() if isinstance(value, list) and key not in {"tags"}}
-        device_type = {key: value for key, value in template.items() if key not in components and key not in {"manufacturer"}}
-        slug = re.sub(r"[^a-z0-9]+", "-", str(device_type.get("slug") or model).lower()).strip("-")
-        device_type["slug"] = slug
-        device_type["u_height"] = device_type.get("u_height") or 1
-        import_plan = [
-            {"id": "dtl-manufacturer", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": "manufacturers", "action": "create", "data": {"name": template.get("manufacturer")}}},
-            {"id": "dtl-device-type", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": "device-types", "action": "create", "data": {**device_type, "manufacturer": "${dtl-manufacturer.data.id}"}}},
-        ]
-        endpoint_map = {"interfaces": "interface-templates", "power-ports": "power-port-templates", "console-ports": "console-port-templates", "module-bays": "module-bay-templates"}
-        for collection, endpoint_name in endpoint_map.items():
-            for index, component in enumerate(components.get(collection, []), start=1):
-                if isinstance(component, dict):
-                    import_plan.append({"id": f"dtl-{collection}-{index}", "name": "netbox_write", "arguments": {"app": "dcim", "endpoint": endpoint_name, "action": "create", "data": {**component, "device_type": "${dtl-device-type.data.id}"}}})
-        return ToolResult(ok=True, message=f"Template DTL officiel chargé : {template.get('manufacturer')} {template.get('model')}.", data={"source": source, "manufacturer": template.get("manufacturer"), "device_type": device_type, "component_templates": components, "import_plan": import_plan, "template": template})
+        model = str(query.get("model") or query.get("part_number") or "").strip().casefold()
+        catalog = self._read_ndx(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query": model}))
+        candidates = catalog.data.get("candidates", []) if isinstance(catalog.data, dict) else []
+        exact = [item for item in candidates if str(item.get("model") or "").casefold() == model or str(item.get("part_number") or "").casefold() == model]
+        if len(exact) != 1:
+            return ToolResult(ok=False, message="NDX exige une référence exacte avant import.", data={"candidates": candidates})
+        item = exact[0]
+        device_type = {"model": item.get("model"), "slug": item.get("slug"), "u_height": item.get("u_height") or 1}
+        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"manufacturer": item.get("manufacturer") or item.get("vendor_name"), "device_type": device_type, "component_templates": item.get("component_templates") or {}})
 
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""
         if self._normalize(args.app) == "ndx":
             return self._read_ndx(args)
-        if self._normalize(args.app) == "dtl" and self._normalize(args.endpoint) in {"devicetype", "devicetypes"}:
-            return self._read_dtl(args)
+        if self._normalize(args.app) == "ndx" and self._normalize(args.endpoint) in {"spec", "device-types", "devicetypes"}:
+            return self._read_ndx_spec(args)
         if self._normalize(args.app) == "ipam" and self._normalize(args.endpoint) in {"availableips", "prefixavailableips"}:
             return self._read_available_ips(args)
         endpoint, app_name, plugin, actual = self._resolve_endpoint(args.app, args.endpoint)
@@ -360,24 +332,26 @@ class NetBoxTools:
         if len(exact) != 1:
             return ToolResult(ok=False, message=f"NDX retourne {len(candidates)} modèles. Sélectionne la référence exacte avant création.", data={"ndx_candidates": candidates})
         selected = exact[0]
-        detail = self._read_dtl(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer": selected.get("manufacturer") or selected.get("vendor_name"), "model": selected.get("part_number") or selected.get("model")}))
+        detail = self._read_ndx_spec(NetBoxReadArgs(app="ndx", endpoint="spec", method="get", kwargs={"model": selected.get("part_number") or selected.get("model")}))
         if not detail.ok or not isinstance(detail.data, dict) or not detail.data.get("device_type"):
-            return ToolResult(ok=False, message="La spec détaillée DTL de cette référence est indisponible.", data={"ndx_selected": selected})
+            return ToolResult(ok=False, message="La spec NDX de cette référence est indisponible.", data={"ndx_selected": selected})
         payload = {key: detail.data.get(key) for key in ("manufacturer", "device_type", "component_templates")}
-        return ToolResult(ok=True, message="Spec NDX/DTL exacte chargée.", data={"composite": {"type": "import_dtl_devicetype", "payload": payload}, "selected": selected})
+        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"composite": {"type": "import_ndx_devicetype", "payload": payload}, "selected": selected})
 
-    def import_dtl_devicetype(self, arguments: dict[str, Any]) -> ToolResult:
-        """Server-side composite DTL pipeline: parent first, then every template collection."""
+    def import_ndx_devicetype(self, arguments: dict[str, Any]) -> ToolResult:
+        """Server-side composite NDX pipeline: parent first, then every template collection."""
         payload = arguments.get("payload") if isinstance(arguments.get("payload"), dict) else {}
         manufacturer = str(payload.get("manufacturer") or "")
         device_type = dict(payload.get("device_type") or {})
         collections = dict(payload.get("component_templates") or {})
         if not manufacturer or not device_type.get("model"):
-            return ToolResult(ok=False, message="DTO DTL incomplet.")
+            return ToolResult(ok=False, message="DTO NDX incomplet.")
         existing = self.find_existing_create({"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name":manufacturer}})
         maker = existing or self.execute("netbox_write", {"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name": manufacturer}})
         if not maker.ok: return maker
         maker_id = maker.data.get("id") if isinstance(maker.data, dict) else None
+        device_type.pop("front_image", None)
+        device_type.pop("rear_image", None)
         device_type["manufacturer"] = maker_id
         existing = self.find_existing_create({"app":"dcim","endpoint":"device-types","action":"create","data":device_type})
         parent = existing or self.execute("netbox_write", {"app":"dcim","endpoint":"device-types","action":"create","data":device_type})
@@ -392,7 +366,7 @@ class NetBoxTools:
                 result = self.find_existing_create({"app":"dcim","endpoint":endpoint,"action":"create","data":data}) or self.execute("netbox_write", {"app":"dcim","endpoint":endpoint,"action":"create","data":data})
                 if not result.ok: return result
                 created += 1
-        return ToolResult(ok=True, message=f"Import DTL terminé : {created} templates créés.", data={"id": parent_id, "templates_created": created})
+        return ToolResult(ok=True, message=f"Import NDX terminé : {created} templates créés.", data={"id": parent_id, "templates_created": created})
 
     def netbox_write(self, args: NetBoxWriteArgs) -> ToolResult:
         """Écriture universelle create/update/delete sur n'importe quel endpoint NetBox."""

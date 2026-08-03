@@ -184,6 +184,17 @@ class NetBoxTools:
             data=data,
         )
 
+    def _read_ndx(self, args: NetBoxReadArgs) -> ToolResult:
+        query = args.merged_kwargs()
+        text = str(query.get("query") or query.get("model") or query.get("part_number") or "").strip().casefold()
+        if not text:
+            raise NetBoxChatError("NDX exige query, model ou part_number.")
+        index = requests.get("https://netboxlabs.com/ndx/data/search-index.json", timeout=30)
+        index.raise_for_status()
+        records = index.json()
+        matches = [item for item in records if any(text in str(item.get(field) or "").casefold() for field in ("model", "part_number", "manufacturer", "vendor_name", "slug"))]
+        return ToolResult(ok=True, message=f"NDX : {len(matches)} correspondance(s).", data={"source":"ndx", "query":text, "candidates":matches[:50]})
+
     def _read_dtl(self, args: NetBoxReadArgs) -> ToolResult:
         """Read an official Device Type Library YAML template; it never mutates NetBox."""
         query = args.merged_kwargs()
@@ -225,6 +236,8 @@ class NetBoxTools:
 
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""
+        if self._normalize(args.app) == "ndx":
+            return self._read_ndx(args)
         if self._normalize(args.app) == "dtl" and self._normalize(args.endpoint) in {"devicetype", "devicetypes"}:
             return self._read_dtl(args)
         if self._normalize(args.app) == "ipam" and self._normalize(args.endpoint) in {"availableips", "prefixavailableips"}:

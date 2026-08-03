@@ -286,7 +286,10 @@ class NetBoxTools:
         if not identities:
             return None
         try:
-            records = list(islice(endpoint.filter(limit=5, **identities), 5))
+            records = list(islice(endpoint.filter(limit=20, **identities), 20))
+            if not records and self._normalize(args.endpoint) == "manufacturers" and data.get("name"):
+                wanted = self._normalize(str(data["name"]))
+                records = [record for record in islice(endpoint.all(limit=200), 200) if wanted in self._normalize(str(getattr(record, "name", ""))) or self._normalize(str(getattr(record, "name", ""))) in wanted]
         except Exception:
             return None
         if not records:
@@ -372,12 +375,12 @@ class NetBoxTools:
         if not manufacturer or not device_type.get("model"):
             return ToolResult(ok=False, message="DTO DTL incomplet.")
         existing = self.find_existing_create({"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name":manufacturer}})
-        maker = existing or self.netbox_write(NetBoxWriteArgs(app="dcim", endpoint="manufacturers", action="create", data={"name": manufacturer}))
+        maker = existing or self.execute("netbox_write", {"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name": manufacturer}})
         if not maker.ok: return maker
         maker_id = maker.data.get("id") if isinstance(maker.data, dict) else None
         device_type["manufacturer"] = maker_id
         existing = self.find_existing_create({"app":"dcim","endpoint":"device-types","action":"create","data":device_type})
-        parent = existing or self.netbox_write(NetBoxWriteArgs(app="dcim", endpoint="device-types", action="create", data=device_type))
+        parent = existing or self.execute("netbox_write", {"app":"dcim","endpoint":"device-types","action":"create","data":device_type})
         if not parent.ok: return parent
         parent_id = parent.data.get("id") if isinstance(parent.data, dict) else None
         endpoint_map = {"interfaces":"interface-templates", "power-ports":"power-port-templates", "console-ports":"console-port-templates", "module-bays":"module-bay-templates"}
@@ -386,7 +389,7 @@ class NetBoxTools:
             for component in collections.get(collection, []):
                 if not isinstance(component, dict): continue
                 data = {**component, "device_type": parent_id}
-                result = self.find_existing_create({"app":"dcim","endpoint":endpoint,"action":"create","data":data}) or self.netbox_write(NetBoxWriteArgs(app="dcim", endpoint=endpoint, action="create", data=data))
+                result = self.find_existing_create({"app":"dcim","endpoint":endpoint,"action":"create","data":data}) or self.execute("netbox_write", {"app":"dcim","endpoint":endpoint,"action":"create","data":data})
                 if not result.ok: return result
                 created += 1
         return ToolResult(ok=True, message=f"Import DTL terminé : {created} templates créés.", data={"id": parent_id, "templates_created": created})

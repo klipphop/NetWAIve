@@ -522,6 +522,22 @@ class NetBoxAgent:
             messages.append(assistant.model_dump(exclude_none=True))
             for call, arguments in parsed:
                 if call.function.name in self.tools.MUTATING_TOOLS and not confirm_write:
+                    ndx_preparer = getattr(self.tools, "prepare_ndx_device_type", None)
+                    if call.function.name == "netbox_write" and callable(ndx_preparer) and str(arguments.get("action") or "") == "create" and str(arguments.get("app") or "").lower() == "dcim" and str(arguments.get("endpoint") or "").replace("_", "-").lower() in {"device-types", "device-type"}:
+                        prepared = ndx_preparer(arguments.get("data") or {})
+                        if prepared.ok and isinstance(prepared.data, dict) and prepared.data.get("composite"):
+                            composite = prepared.data["composite"]
+                            pending_call = PendingToolCall(id="ndx-import", name="import_dtl_devicetype", arguments=composite)
+                            write_plan.append(pending_call)
+                            signatures.add(self._call_signature(pending_call))
+                            result = self._planned_result(pending_call)
+                            collected.append(result)
+                            messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
+                            continue
+                        result = prepared
+                        collected.append(result)
+                        messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
+                        continue
                     arguments = self._resolve_available_references(arguments, tool_outputs)
                     collision = None
                     collision_checker = getattr(self.tools, "preflight_termination_collisions", None)

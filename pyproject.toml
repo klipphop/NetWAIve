@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netwaive"
-version = "0.4.7"
+version = "0.4.8"
 description = "Assistant LLM NetBox avec tools pynetbox typés"
 readme = "README.md"
 requires-python = ">=3.11"

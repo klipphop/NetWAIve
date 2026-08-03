@@ -349,6 +349,20 @@ class NetBoxTools:
                 return ToolResult(ok=False, message="Valeur invalide : " + json.dumps({"field": field, "value": value, "choices": enum}, ensure_ascii=False), data={"invalid_field": field, "choices": enum})
         return None
 
+    def prepare_ndx_device_type(self, data: dict[str, Any]) -> ToolResult:
+        model = str(data.get("model") or data.get("name") or "").strip()
+        ndx = self._read_ndx(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query": model}))
+        candidates = (ndx.data or {}).get("candidates", []) if isinstance(ndx.data, dict) else []
+        exact = [item for item in candidates if str(item.get("model") or "").casefold() == model.casefold() or str(item.get("part_number") or "").casefold() == model.casefold()]
+        if len(exact) != 1:
+            return ToolResult(ok=False, message=f"NDX retourne {len(candidates)} modèles. Sélectionne la référence exacte avant création.", data={"ndx_candidates": candidates})
+        selected = exact[0]
+        detail = self._read_dtl(NetBoxReadArgs(app="dtl", endpoint="device-types", method="get", kwargs={"manufacturer": selected.get("manufacturer") or selected.get("vendor_name"), "model": selected.get("part_number") or selected.get("model")}))
+        if not detail.ok or not isinstance(detail.data, dict) or not detail.data.get("device_type"):
+            return ToolResult(ok=False, message="La spec détaillée DTL de cette référence est indisponible.", data={"ndx_selected": selected})
+        payload = {key: detail.data.get(key) for key in ("manufacturer", "device_type", "component_templates")}
+        return ToolResult(ok=True, message="Spec NDX/DTL exacte chargée.", data={"composite": {"type": "import_dtl_devicetype", "payload": payload}, "selected": selected})
+
     def import_dtl_devicetype(self, arguments: dict[str, Any]) -> ToolResult:
         """Server-side composite DTL pipeline: parent first, then every template collection."""
         payload = arguments.get("payload") if isinstance(arguments.get("payload"), dict) else {}

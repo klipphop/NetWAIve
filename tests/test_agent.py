@@ -216,6 +216,43 @@ def test_dtl_directory_search_returns_c9200_candidates(monkeypatch):
     assert result.ok and result.data["candidates"] == ["C9200-24T", "C9200-48P"]
 
 
+def test_composite_dtl_import_is_one_pending_action_and_executes_all_templates():
+    class CompositeTools(FakeTools):
+        def execute(self, name, arguments):
+            if name == "netbox_read" and arguments.get("app") == "dtl":
+                return ToolResult(ok=True, message="DTL chargé", data={
+                    "manufacturer": "Cisco",
+                    "device_type": {"model": "Catalyst 9300-24P", "slug": "c9300-24p", "u_height": 1},
+                    "component_templates": {
+                        "interfaces": [{"name": f"Gi1/0/{i}", "type": "1000base-t"} for i in range(1, 28)],
+                        "power-ports": [],
+                        "console-ports": [{"name": "Console", "type": "rj-45"}, {"name": "Aux", "type": "rj-45"}],
+                        "module-bays": [{"name": f"Bay {i}"} for i in range(1, 4)],
+                    },
+                })
+            return super().execute(name, arguments)
+
+        def import_dtl_devicetype(self, arguments):
+            payload = arguments["payload"]
+            assert payload["device_type"]["slug"] == "c9300-24p"
+            assert len(payload["component_templates"]["interfaces"]) == 27
+            assert len(payload["component_templates"]["console-ports"]) == 2
+            assert len(payload["component_templates"]["module-bays"]) == 3
+            return ToolResult(ok=True, message="Import DTL terminé : 32 templates créés.", data={"id": 99, "templates_created": 32})
+
+    read = tool_call("netbox_read", {"app":"dtl", "endpoint":"device-types", "method":"get", "kwargs":{"manufacturer":"Cisco", "model":"C9300-24P"}}, "dtl-read")
+    client = FakeClient([Message(tool_calls=[read]), Message("Plan prêt")])
+    tools = CompositeTools()
+    agent = NetBoxAgent(settings(), tools=tools, client=client)
+    result = agent.run("Importe le Cisco C9300-24P depuis la DTL")
+    assert len(result.pending_confirmation) == 1
+    assert result.pending_confirmation[0].name == "import_dtl_devicetype"
+    assert "27 interfaces" in result.message
+    executed = agent.confirm("Importe le Cisco C9300-24P depuis la DTL", result.pending_confirmation)
+    assert executed.tool_results[0].ok
+    assert executed.tool_results[0].data["templates_created"] == 32
+
+
 def test_only_three_universal_tools_are_exposed():
     assert set(FakeTools.ARG_MODELS) == {"netbox_read", "netbox_write", "get_endpoint_schema"}
 

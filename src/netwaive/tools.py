@@ -336,6 +336,34 @@ class NetBoxTools:
                 return ToolResult(ok=False, message="Valeur invalide : " + json.dumps({"field": field, "value": value, "choices": enum}, ensure_ascii=False), data={"invalid_field": field, "choices": enum})
         return None
 
+    def import_dtl_devicetype(self, arguments: dict[str, Any]) -> ToolResult:
+        """Server-side composite DTL pipeline: parent first, then every template collection."""
+        payload = arguments.get("payload") if isinstance(arguments.get("payload"), dict) else {}
+        manufacturer = str(payload.get("manufacturer") or "")
+        device_type = dict(payload.get("device_type") or {})
+        collections = dict(payload.get("component_templates") or {})
+        if not manufacturer or not device_type.get("model"):
+            return ToolResult(ok=False, message="DTO DTL incomplet.")
+        existing = self.find_existing_create({"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name":manufacturer}})
+        maker = existing or self.netbox_write(NetBoxWriteArgs(app="dcim", endpoint="manufacturers", action="create", data={"name": manufacturer}))
+        if not maker.ok: return maker
+        maker_id = maker.data.get("id") if isinstance(maker.data, dict) else None
+        device_type["manufacturer"] = maker_id
+        existing = self.find_existing_create({"app":"dcim","endpoint":"device-types","action":"create","data":device_type})
+        parent = existing or self.netbox_write(NetBoxWriteArgs(app="dcim", endpoint="device-types", action="create", data=device_type))
+        if not parent.ok: return parent
+        parent_id = parent.data.get("id") if isinstance(parent.data, dict) else None
+        endpoint_map = {"interfaces":"interface-templates", "power-ports":"power-port-templates", "console-ports":"console-port-templates", "module-bays":"module-bay-templates"}
+        created = 0
+        for collection, endpoint in endpoint_map.items():
+            for component in collections.get(collection, []):
+                if not isinstance(component, dict): continue
+                data = {**component, "device_type": parent_id}
+                result = self.find_existing_create({"app":"dcim","endpoint":endpoint,"action":"create","data":data}) or self.netbox_write(NetBoxWriteArgs(app="dcim", endpoint=endpoint, action="create", data=data))
+                if not result.ok: return result
+                created += 1
+        return ToolResult(ok=True, message=f"Import DTL terminé : {created} templates créés.", data={"id": parent_id, "templates_created": created})
+
     def netbox_write(self, args: NetBoxWriteArgs) -> ToolResult:
         """Écriture universelle create/update/delete sur n'importe quel endpoint NetBox."""
         endpoint, app_name, plugin, actual = self._resolve_endpoint(args.app, args.endpoint)

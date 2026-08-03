@@ -257,6 +257,12 @@ class NetBoxAgent:
         english = language == "en"
         lines = ["Pending changes awaiting your validation:" if english else "Modifications en attente de votre validation :"]
         for call in pending:
+            if call.name == "import_dtl_devicetype":
+                payload = call.arguments.get("payload", {})
+                dt = payload.get("device_type", {}) if isinstance(payload, dict) else {}
+                comp = payload.get("component_templates", {}) if isinstance(payload, dict) else {}
+                lines.append(f"• Import DTL : DeviceType '{payload.get('manufacturer')} {dt.get('model')}' (1 DeviceType, {len(comp.get('interfaces', []))} interfaces, {len(comp.get('power-ports', []))} ports alimentation, {len(comp.get('console-ports', []))} ports console)")
+                continue
             args = call.arguments
             data = args.get("data") if isinstance(args.get("data"), dict) else {}
             action = str(args.get("action") or "create").lower()
@@ -548,13 +554,13 @@ class NetBoxAgent:
                     result = self.tools.execute(call.function.name, arguments)
                     collected.append(result)
                     tool_outputs[call.id] = result.model_dump()
-                    if call.function.name == "netbox_read" and str(arguments.get("app") or "").strip().lower() == "dtl" and isinstance(result.data, dict):
-                        for item in result.data.get("import_plan", []):
-                            pending_call = PendingToolCall.model_validate(item)
-                            signature = self._call_signature(pending_call)
-                            if signature not in signatures:
-                                write_plan.append(pending_call)
-                                signatures.add(signature)
+                    if call.function.name == "netbox_read" and str(arguments.get("app") or "").strip().lower() == "dtl" and isinstance(result.data, dict) and result.data.get("device_type"):
+                        payload = {key: result.data.get(key) for key in ("manufacturer", "device_type", "component_templates")}
+                        pending_call = PendingToolCall(id="dtl-import", name="import_dtl_devicetype", arguments={"type": "import_dtl_devicetype", "payload": payload})
+                        signature = self._call_signature(pending_call)
+                        if signature not in signatures:
+                            write_plan.append(pending_call)
+                            signatures.add(signature)
                     if call.function.name == "netbox_read":
                         read_targets.add(self._target_key(arguments))
                         if result.ok:
@@ -676,7 +682,10 @@ class NetBoxAgent:
                     existing = self.tools.find_existing_create(arguments)
                 except Exception:
                     existing = None
-            result = existing or self.tools.execute(call.name, arguments)
+            if call.name == "import_dtl_devicetype":
+                result = self.tools.import_dtl_devicetype(arguments)
+            else:
+                result = existing or self.tools.execute(call.name, arguments)
             results.append(result)
             outputs[call.id] = result.model_dump()
             if not result.ok:

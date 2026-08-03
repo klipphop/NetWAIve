@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-07-31
+
+### Changed
+- Encapsulated DTL imports as one server-side composite pending action.
+- Added an atomic DeviceType-first pipeline for all component templates.
+
+### Fixed
+- Prevented LLM truncation of large DTL component lists and condensed the confirmation card.
+
 ## [0.4.5] - 2026-07-31
 
 ### Fixed

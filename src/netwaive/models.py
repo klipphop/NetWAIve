@@ -1,6 +1,15 @@
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+
+NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+NDX_COMPONENT_ENDPOINTS = {
+    "interfaces": "interface-templates",
+    "power-ports": "power-port-templates",
+    "console-ports": "console-port-templates",
+    "module-bays": "module-bay-templates",
+}
 
 
 class NetBoxReadArgs(BaseModel):
@@ -40,6 +49,40 @@ class ToolResult(BaseModel):
     ok: bool
     message: str
     data: Any = None
+
+
+class NDXDeviceTypeDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: NonEmptyStr
+    slug: NonEmptyStr
+    u_height: float = Field(default=1, gt=0)
+    front_image: Any = None
+    rear_image: Any = None
+
+
+class NDXImportPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manufacturer: NonEmptyStr
+    device_type: NDXDeviceTypeDTO
+    component_templates: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+    @field_validator("component_templates")
+    @classmethod
+    def validate_components(cls, value: dict[str, list[dict[str, Any]]]):
+        unknown = set(value) - set(NDX_COMPONENT_ENDPOINTS)
+        if unknown:
+            raise ValueError(f"collections NDX inconnues: {sorted(unknown)}")
+        for components in value.values():
+            for component in components:
+                name = component.get("name") if isinstance(component, dict) else None
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("un template NDX doit avoir un nom non vide")
+        return value
+
+    def interface_count(self) -> int:
+        return len(self.component_templates.get("interfaces", []))
 
 
 class PendingToolCall(BaseModel):

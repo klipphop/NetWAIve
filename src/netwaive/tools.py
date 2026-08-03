@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 import json
-import requests
-import yaml
 import re
-from itertools import islice
+from itertools import combinations, islice
 from typing import Any
 
 import pynetbox
 from pynetbox.core.app import App
 from pynetbox.core.query import RequestError
 
+from .composite import NDXCompositeImporter
 from .config import Settings
 from .errors import NetBoxChatError, ObjectNotFound
 from .models import (
     GetEndpointSchemaArgs,
     NetBoxReadArgs,
     NetBoxWriteArgs,
+    NDXImportPayload,
     ToolResult,
 )
+from .ndx import NDXConnector
 
 
 class NetBoxTools:
@@ -39,6 +40,7 @@ class NetBoxTools:
             strict_filters=True,
         )
         self.api.http_session.verify = settings.netbox_verify_ssl
+        self.ndx = NDXConnector()
 
     def tool_schemas(self) -> list[dict[str, Any]]:
         descriptions = {
@@ -186,38 +188,21 @@ class NetBoxTools:
 
     def _read_ndx(self, args: NetBoxReadArgs) -> ToolResult:
         query = args.merged_kwargs()
-        text = str(query.get("query") or query.get("model") or query.get("part_number") or "").strip().casefold()
-        if not text:
-            raise NetBoxChatError("NDX exige query, model ou part_number.")
-        index = requests.get("https://netboxlabs.com/ndx/data/search-index.json", timeout=30)
-        index.raise_for_status()
-        records = index.json()
-        matches = [item for item in records if any(text in str(item.get(field) or "").casefold() for field in ("model", "part_number", "manufacturer", "vendor_name", "slug"))]
-        return ToolResult(ok=True, message=f"NDX : {len(matches)} correspondance(s).", data={"source":"ndx", "query":text, "candidates":matches[:50]})
+        text = query.get("query") or query.get("model") or query.get("part_number")
+        matches = self.ndx.search(text)
+        return ToolResult(ok=True, message=f"NDX : {len(matches)} correspondance(s).", data={"source":"ndx", "query":str(text or ""), "candidates":matches[:50]})
 
     def _read_ndx_spec(self, args: NetBoxReadArgs) -> ToolResult:
         query = args.merged_kwargs()
-        model = str(query.get("model") or query.get("part_number") or "").strip().casefold()
-        catalog = self._read_ndx(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query": model}))
-        candidates = catalog.data.get("candidates", []) if isinstance(catalog.data, dict) else []
-        exact = [item for item in candidates if str(item.get("model") or "").casefold() == model or str(item.get("part_number") or "").casefold() == model]
-        if len(exact) != 1:
+        model = query.get("model") or query.get("part_number")
+        candidates = self.ndx.search(model)
+        payload = self.ndx.build_payload(model)
+        if payload is None:
             return ToolResult(ok=False, message="NDX exige une référence exacte avant import.", data={"candidates": candidates})
-        item = exact[0]
-        components = item.get("component_templates") or {}
-        if not components:
-            vendor = str(item.get("manufacturer") or item.get("vendor_name") or "").strip()
-            part = str(item.get("part_number") or item.get("model") or "").strip()
-            slug_vendor = re.sub(r"[^A-Za-z0-9]+", "-", vendor).strip("-")
-            for branch in ("main", "master"):
-                url = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/{branch}/device-types/{slug_vendor}/{part}.yaml"
-                response = requests.get(url, timeout=15)
-                if response.status_code == 200:
-                    raw = yaml.safe_load(response.text) or {}
-                    components = {key: value for key, value in raw.items() if key in {"interfaces", "power-ports", "console-ports", "module-bays"} and isinstance(value, list)}
-                    break
-        device_type = {"model": item.get("model") or item.get("part_number"), "slug": item.get("slug"), "u_height": item.get("u_height") or 1}
-        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"manufacturer": item.get("manufacturer") or item.get("vendor_name"), "device_type": device_type, "component_templates": components})
+        validated = NDXImportPayload.model_validate(payload)
+        if validated.interface_count() == 0:
+            return ToolResult(ok=False, message="Spec NDX incomplète : aucune interface publiée.", data={"reason": "empty_interface_templates"})
+        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data=payload)
 
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""
@@ -270,13 +255,42 @@ class NetBoxTools:
         identities = {key: data[key] for key in ("name", "slug", "prefix", "address", "vid", "model") if data.get(key) not in (None, "")}
         if not identities:
             return None
+        context_ids = {key: value for key, value in data.items() if isinstance(value, int) and not isinstance(value, bool) and key not in {"id", "vid"}}
+        records = None
+        context_filter_used = False
+        relation_filters = [(f"{key}_id", value) for key, value in context_ids.items()]
+        for size in range(len(relation_filters), 0, -1):
+            if context_filter_used:
+                break
+            for subset in combinations(relation_filters, size):
+                try:
+                    scoped_filters = dict(subset)
+                    records = list(islice(endpoint.filter(limit=100, **identities, **scoped_filters), 100))
+                    context_filter_used = True
+                    break
+                except Exception:
+                    continue
         try:
-            records = list(islice(endpoint.filter(limit=20, **identities), 20))
-            if not records and self._normalize(args.endpoint) == "manufacturers" and data.get("name"):
-                wanted = self._normalize(str(data["name"]))
-                records = [record for record in islice(endpoint.all(limit=200), 200) if wanted in self._normalize(str(getattr(record, "name", ""))) or self._normalize(str(getattr(record, "name", ""))) in wanted]
+            if records is None:
+                records = list(islice(endpoint.filter(limit=1000, **identities), 1000))
         except Exception:
             return None
+        if context_ids:
+            scoped = []
+            for record in records:
+                serialized = self._safe(record)
+                if not isinstance(serialized, dict):
+                    continue
+                valid = True
+                for key, expected in context_ids.items():
+                    current = serialized.get(key)
+                    current_id = current.get("id") if isinstance(current, dict) else current
+                    if current_id != expected:
+                        valid = False
+                        break
+                if valid:
+                    scoped.append(record)
+            records = scoped
         if not records:
             return None
         record = self._safe(records[0])
@@ -339,52 +353,19 @@ class NetBoxTools:
 
     def prepare_ndx_device_type(self, data: dict[str, Any]) -> ToolResult:
         model = str(data.get("model") or data.get("name") or "").strip()
-        ndx = self._read_ndx(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query": model}))
-        candidates = (ndx.data or {}).get("candidates", []) if isinstance(ndx.data, dict) else []
-        exact = [item for item in candidates if str(item.get("model") or "").casefold() == model.casefold() or str(item.get("part_number") or "").casefold() == model.casefold()]
-        if len(exact) != 1:
+        candidates = self.ndx.search(model)
+        payload = self.ndx.build_payload(model)
+        if payload is None:
             return ToolResult(ok=False, message=f"NDX retourne {len(candidates)} modèles. Sélectionne la référence exacte avant création.", data={"ndx_candidates": candidates})
-        selected = exact[0]
-        detail = self._read_ndx_spec(NetBoxReadArgs(app="ndx", endpoint="spec", method="get", kwargs={"model": selected.get("part_number") or selected.get("model")}))
-        if not detail.ok or not isinstance(detail.data, dict) or not detail.data.get("device_type"):
-            return ToolResult(ok=False, message="La spec NDX de cette référence est indisponible.", data={"ndx_selected": selected})
-        payload = {key: detail.data.get(key) for key in ("manufacturer", "device_type", "component_templates")}
-        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"composite": {"type": "import_ndx_devicetype", "payload": payload}, "selected": selected})
+        validated = NDXImportPayload.model_validate(payload)
+        if validated.interface_count() == 0:
+            return ToolResult(ok=False, message="Spec NDX incomplète : aucune interface publiée.", data={"reason": "empty_interface_templates"})
+        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"composite": {"type": "import_ndx_devicetype", "payload": payload}, "selected": self.ndx.exact(model, candidates)})
 
     def import_ndx_devicetype(self, arguments: dict[str, Any]) -> ToolResult:
-        """Server-side composite NDX pipeline: parent first, then every template collection."""
-        payload = arguments.get("payload") if isinstance(arguments.get("payload"), dict) else {}
-        manufacturer = str(payload.get("manufacturer") or "")
-        device_type = dict(payload.get("device_type") or {})
-        components = dict(payload.get("component_templates") or {})
-        if not manufacturer or not device_type.get("model"):
-            return ToolResult(ok=False, message="DTO NDX incomplet.")
-        if len(components.get("interfaces", [])) == 0:
-            return ToolResult(ok=False, message="Import NDX refusé : la spec ne contient aucune interface.", data={"reason": "empty_interface_templates"})
-        aliases = {"ale": "Alcatel-Lucent Enterprise", "alcatel": "Alcatel-Lucent Enterprise", "cisco": "Cisco Systems"}
-        manufacturer = aliases.get(manufacturer.casefold(), manufacturer)
-        existing = self.find_existing_create({"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name":manufacturer}})
-        maker = existing or self.execute("netbox_write", {"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name": manufacturer}})
-        if not maker.ok: return maker
-        maker_id = maker.data.get("id") if isinstance(maker.data, dict) else None
-        device_type.pop("front_image", None)
-        device_type.pop("rear_image", None)
-        device_type["manufacturer"] = maker_id
-        existing = self.find_existing_create({"app":"dcim","endpoint":"device-types","action":"create","data":device_type})
-        parent = existing or self.execute("netbox_write", {"app":"dcim","endpoint":"device-types","action":"create","data":device_type})
-        if not parent.ok: return parent
-        parent_id = parent.data.get("id") if isinstance(parent.data, dict) else None
-        endpoint_map = {"interfaces":"interface-templates", "power-ports":"power-port-templates", "console-ports":"console-port-templates", "module-bays":"module-bay-templates"}
-        collections = components
-        created = 0
-        for collection, endpoint in endpoint_map.items():
-            for component in collections.get(collection, []):
-                if not isinstance(component, dict): continue
-                data = {**component, "device_type": parent_id}
-                result = self.find_existing_create({"app":"dcim","endpoint":endpoint,"action":"create","data":data}) or self.execute("netbox_write", {"app":"dcim","endpoint":endpoint,"action":"create","data":data})
-                if not result.ok: return result
-                created += 1
-        return ToolResult(ok=True, message=f"Import NDX terminé : {created} templates créés.", data={"id": parent_id, "templates_created": created})
+        """Délègue l'exécution du DTO composite NDX validé."""
+        raw_payload = dict(arguments.get("payload") or {}) if isinstance(arguments.get("payload"), dict) else {}
+        return NDXCompositeImporter(self.find_existing_create, self.execute).run(raw_payload)
 
     def netbox_write(self, args: NetBoxWriteArgs) -> ToolResult:
         """Écriture universelle create/update/delete sur n'importe quel endpoint NetBox."""

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.12] - 2026-08-03
+
+### Changed
+- Split NDX catalogue access, composite DTO validation, and NetBox import execution into dedicated modules.
+- Replaced vendor aliases with metadata-driven name, token, and acronym resolution from the live NDX vendor catalogue.
+- Made technical search index all nested NDX metadata without field- or vendor-specific rules.
+
+### Fixed
+- Resolved Community specs through live repository metadata and manufacturer directory listings instead of guessed filenames.
+- Blocked NetBox Labs-only or otherwise incomplete specs before pending confirmation.
+- Enforced strict DeviceType DTOs, positive parent IDs, exact identity matching, and parent-scoped idempotence.
+- Removed all vendor/model-specific runtime literals and unsafe substring mutation matching.
+
+### Tests
+- Added generic Juniper, Fortinet, Arista, Allied Telesis, ambiguity, malformed DTO, composite ordering, and scoped-idempotence coverage.
+
 ## [0.4.11] - 2026-08-03
 
 ### Fixed

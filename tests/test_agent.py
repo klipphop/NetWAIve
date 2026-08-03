@@ -194,7 +194,7 @@ def test_ndx_catalog_search_returns_exact_candidate(monkeypatch):
         def raise_for_status(self): pass
         def json(self):
             return [{"vendor_name":"Cisco Systems","manufacturer":"Cisco","model":"Catalyst 9300-24P","part_number":"C9300-24P","slug":"cisco-c9300-24p","type":"device-type"}]
-    monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: Response())
+    monkeypatch.setattr("netwaive.ndx.requests.get", lambda url, timeout: Response())
     result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query":"C9300-24P"}))
     assert result.ok and result.data["candidates"][0]["part_number"] == "C9300-24P"
 
@@ -205,7 +205,7 @@ def test_ndx_catalog_search_returns_ambiguous_candidates(monkeypatch):
         ok = True
         def raise_for_status(self): pass
         def json(self): return [{"model":"Catalyst 9200-24P"},{"model":"Catalyst 9200-24T"}]
-    monkeypatch.setattr("netwaive.tools.requests.get", lambda url, timeout: Response())
+    monkeypatch.setattr("netwaive.ndx.requests.get", lambda url, timeout: Response())
     result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query":"Catalyst 9200"}))
     assert len(result.data["candidates"]) == 2
 

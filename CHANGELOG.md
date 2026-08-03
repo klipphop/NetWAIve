@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.14] - 2026-08-03
+
+### Fixed
+- Prevented stale in-flight chat and history responses from restoring context after an UI Reset.
+- Added a Redis-backed reset generation guard for consistent multi-worker Gunicorn purges.
+- Added topological component-template execution and symbolic dependency resolution for rear/front ports and interface bridges.
+
+### Tests
+- Added stale-request reset, backend generation, AbortController, and component dependency-ordering coverage.
+
 ## [0.4.13] - 2026-08-03
 
 ### Added

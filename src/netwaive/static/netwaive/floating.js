@@ -31,6 +31,8 @@
       layout: "floating",
       ui: { open: true, layout: "docked", width: 320 },
     };
+    let resetEpoch = 0;
+    let activeChatController = null;
 
     const api = {
       history: "/plugins/netwaive/api/history/",
@@ -239,14 +241,19 @@
       no.textContent = "Deny";
       const sendQuick = async (message, approvePending = false, approvalScope = "once") => {
         addMessage("user", message);
+        const epoch = resetEpoch;
+        const controller = new AbortController();
+        activeChatController = controller;
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
           body: JSON.stringify({ message, conversation_id: state.activeSessionId, approve_pending: approvePending, approval_scope: approvalScope }),
+          signal: controller.signal,
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
         const data = await response.json();
+        if (epoch !== resetEpoch) return;
         if (!response.ok) throw new Error(data.error || "Erreur LLM");
         state.sessions = data.sessions || state.sessions;
         state.activeSessionId = data.active_session_id || state.activeSessionId;
@@ -258,17 +265,17 @@
       };
       yes.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
-        try { await sendQuick("oui", true); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
+        try { await sendQuick("oui", true); } catch (error) { if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
       });
       allowSession.addEventListener("click", async () => {
         yes.disabled = true; allowSession.disabled = true; no.disabled = true;
-        try { await sendQuick("allow session", true, "session"); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
+        try { await sendQuick("allow session", true, "session"); } catch (error) { if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; allowSession.disabled = false; no.disabled = false; }
       });
       no.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
-        try { await sendQuick("non"); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
+        try { await sendQuick("non"); } catch (error) { if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
       });
       wrap.appendChild(yes);
@@ -322,8 +329,10 @@
     }
 
     async function loadState() {
+      const epoch = resetEpoch;
       const r = await fetch(api.history, { credentials: "same-origin" });
       const data = await r.json();
+      if (epoch !== resetEpoch) return state.ui;
       state.sessions = data.sessions || [];
       state.activeSessionId = data.active_session_id || null;
       state.history = data.history || [];
@@ -384,6 +393,9 @@
 
     clearBtn?.addEventListener("click", async (event) => {
       event.stopPropagation();
+      resetEpoch += 1;
+      activeChatController?.abort();
+      activeChatController = null;
       try {
         const r = await fetch(api.reset, {
           method: "POST",
@@ -504,15 +516,20 @@
       addMessage("user", message);
       const button = form.querySelector("button[type='submit']");
       button.disabled = true;
+      const epoch = resetEpoch;
+      const controller = new AbortController();
+      activeChatController = controller;
       try {
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
           body: JSON.stringify({ message, conversation_id: state.activeSessionId }),
+          signal: controller.signal,
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
         const data = await response.json();
+        if (epoch !== resetEpoch) return;
         if (!response.ok) throw new Error(data.error || "Erreur LLM");
         state.sessions = data.sessions || state.sessions;
         state.activeSessionId = data.active_session_id || state.activeSessionId;
@@ -521,9 +538,8 @@
         state.ui = { ...state.ui, ...(data.ui || {}) };
         renderTabs();
         renderConversation();
-        if (data.reset && data.message) addMessage("assistant", data.message);
       } catch (error) {
-        addMessage("assistant", `Erreur : ${error.message}`);
+        if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`);
       } finally {
         button.disabled = false;
         input.focus();

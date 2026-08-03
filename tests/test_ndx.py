@@ -279,6 +279,27 @@ def test_composite_executor_orders_parent_and_all_children_generically():
     assert all(item["data"].get("device_type") == 2 for item in writes[2:])
 
 
+def test_composite_resolves_component_dependencies_before_writes():
+    writes = []
+    def execute(name, arguments):
+        writes.append(arguments)
+        return ToolResult(ok=True, message="ok", data={"id": len(writes)})
+    payload = {
+        "object_type":"device-type",
+        "manufacturer":"Generic",
+        "parent":{"model":"Patch","slug":"patch"},
+        "component_templates":{
+            "interfaces":[{"name":"eth0","type":"1000base-t"}],
+            "front-ports":[{"name":"F1","type":"8p8c","rear_port":"R1","rear_port_position":1}],
+            "rear-ports":[{"name":"R1","type":"8p8c","positions":1}],
+        },
+    }
+    result = NDXCompositeImporter(lambda arguments: None, execute).run(payload)
+    assert result.ok
+    assert [item["endpoint"] for item in writes] == ["manufacturers", "device-types", "interface-templates", "rear-port-templates", "front-port-templates"]
+    assert writes[-1]["data"]["rear_port"] == 4
+
+
 def test_runtime_contains_no_vendor_specific_rules():
     root = Path(__file__).parents[1] / "src" / "netwaive"
     runtime = "\n".join(path.read_text() for path in root.glob("*.py"))

@@ -6,6 +6,8 @@
   const clearButton = document.getElementById("netwaive-clear");
   let conversationId = null;
   let pendingWrite = null;
+  let resetEpoch = 0;
+  let activeChatController = null;
 
   const renderMarkdown = (text) => {
     const esc = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
@@ -99,30 +101,34 @@
 
     const sendQuick = async (message, approvePending = false) => {
       add("user", message);
+      const epoch = resetEpoch;
+      const controller = new AbortController();
+      activeChatController = controller;
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
         body: JSON.stringify({ message, conversation_id: conversationId, approve_pending: approvePending }),
+        signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
       const data = await response.json();
+      if (epoch !== resetEpoch) return;
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
-      if (data.reset) messages.replaceChildren();
       add("assistant", data.message || data.answer || JSON.stringify(data));
       renderPendingControls();
     };
 
     yes.addEventListener("click", async () => {
       yes.disabled = true; no.disabled = true;
-      try { await sendQuick("oui", true); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
+      try { await sendQuick("oui", true); } catch (error) { if (error.name !== "AbortError") add("assistant", `Erreur : ${error.message}`); }
       finally { yes.disabled = false; no.disabled = false; }
     });
     no.addEventListener("click", async () => {
       yes.disabled = true; no.disabled = true;
-      try { await sendQuick("non"); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
+      try { await sendQuick("non"); } catch (error) { if (error.name !== "AbortError") add("assistant", `Erreur : ${error.message}`); }
       finally { yes.disabled = false; no.disabled = false; }
     });
 
@@ -134,6 +140,9 @@
 
   clearButton?.addEventListener("click", async () => {
     const token = document.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
+    resetEpoch += 1;
+    activeChatController?.abort();
+    activeChatController = null;
     try {
       const response = await fetch("/plugins/netwaive/api/reset/", {
         method: "POST",
@@ -150,9 +159,11 @@
     }
   });
 
+  const historyEpoch = resetEpoch;
   fetch("/plugins/netwaive/api/history/", { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => {
+      if (historyEpoch !== resetEpoch) return;
       (data.history || []).forEach(item => add(item.role, item.text));
       conversationId = data.active_session_id || conversationId;
       pendingWrite = data.pending_write || null;
@@ -179,23 +190,27 @@
     add("user", message);
     const button = form.querySelector("button");
     button.disabled = true;
+    const epoch = resetEpoch;
+    const controller = new AbortController();
+    activeChatController = controller;
     try {
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
         body: JSON.stringify({ message, conversation_id: conversationId }),
+        signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
       const data = await response.json();
+      if (epoch !== resetEpoch) return;
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
-      if (data.reset) messages.replaceChildren();
       add("assistant", data.message || data.answer || JSON.stringify(data));
       renderPendingControls();
     } catch (error) {
-      add("assistant", `Erreur : ${error.message}`);
+      if (error.name !== "AbortError") add("assistant", `Erreur : ${error.message}`);
     } finally {
       button.disabled = false;
       input.focus();

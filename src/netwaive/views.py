@@ -5,6 +5,7 @@ import uuid
 from typing import Any
 
 from django.conf import settings as django_settings
+from django.core.cache import cache
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import render
@@ -41,21 +42,34 @@ def _agent_settings() -> Settings:
     return Settings(**explicit)
 
 
-def _default_state() -> dict[str, Any]:
+def _default_state(generation: str | None = None) -> dict[str, Any]:
     session_id = str(uuid.uuid4())
     return {
+        "generation": generation or str(uuid.uuid4()),
         "sessions": [{"id": session_id, "title": "Session 1", "history": [], "pending_write": None, "allow_session": False}],
         "active_session_id": session_id,
         "ui": {"open": True, "layout": "docked", "width": 320},
     }
 
 
+def _generation_cache_key(request) -> str | None:
+    session_key = getattr(request.session, "session_key", None)
+    return f"netwaive:generation:{session_key}" if session_key else None
+
+
 def _load_state(request) -> dict[str, Any]:
     state = request.session.get(SESSION_KEY)
+    cache_key = _generation_cache_key(request)
+    current_generation = cache.get(cache_key) if cache_key else None
+    if current_generation and isinstance(state, dict) and state.get("generation") != current_generation:
+        state = _default_state(current_generation)
     if not isinstance(state, dict) or not isinstance(state.get("sessions"), list):
-        state = _default_state()
+        state = _default_state(current_generation)
     if not state["sessions"]:
-        state = _default_state()
+        state = _default_state(current_generation)
+    state.setdefault("generation", current_generation or str(uuid.uuid4()))
+    if cache_key and not current_generation:
+        cache.set(cache_key, state["generation"], timeout=None)
     return state
 
 
@@ -64,10 +78,22 @@ def _save_state(request, state: dict[str, Any]) -> None:
     request.session.modified = True
 
 
+def _generation_is_current(request, generation: str) -> bool:
+    cache_key = _generation_cache_key(request)
+    if cache_key:
+        return cache.get(cache_key) == generation
+    current = request.session.get(SESSION_KEY)
+    return isinstance(current, dict) and current.get("generation") == generation
+
+
 def _purge_agent_state(request) -> dict[str, Any]:
     """Supprime tout état NetWAIve sans invalider la session d’authentification Django."""
     request.session.pop(SESSION_KEY, None)
-    state = _default_state()
+    generation = str(uuid.uuid4())
+    cache_key = _generation_cache_key(request)
+    if cache_key:
+        cache.set(cache_key, generation, timeout=None)
+    state = _default_state(generation)
     _save_state(request, state)
     return state
 
@@ -155,6 +181,7 @@ def chat_api(request):
     normalized = message.casefold()
 
     state = _load_state(request)
+    request_generation = state["generation"]
     active = _active_session(state, str(body.get("conversation_id") or "") or None)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
     agent = NetBoxAgent(_agent_settings())
@@ -214,6 +241,11 @@ def chat_api(request):
                 }
         else:
             active["pending_write"] = None
+
+    if not _generation_is_current(request, request_generation):
+        response = JsonResponse({"error": "Contexte réinitialisé pendant la requête.", "reset": True}, status=409)
+        response["Cache-Control"] = "no-store"
+        return response
 
     if len(active.get("history", [])) == 0:
         active["title"] = message[:36] + ("…" if len(message) > 36 else "")

@@ -26,11 +26,15 @@ NDX_COMPONENT_ENDPOINTS = {
     "console-ports": "console-port-templates",
     "console-server-ports": "console-server-port-templates",
     "power-outlets": "power-outlet-templates",
-    "front-ports": "front-port-templates",
     "rear-ports": "rear-port-templates",
+    "front-ports": "front-port-templates",
     "module-bays": "module-bay-templates",
     "device-bays": "device-bay-templates",
     "inventory-items": "inventory-item-templates",
+}
+NDX_COMPONENT_RELATIONS = {
+    "front-ports": {"rear_port": "rear-ports"},
+    "interfaces": {"bridge": "interfaces"},
 }
 
 class NetBoxReadArgs(BaseModel):

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from .models import NDX_COMPONENT_ENDPOINTS, NDXImportPayload, NDX_OBJECT_CONFIG, ToolResult
+from .models import NDX_COMPONENT_ENDPOINTS, NDX_COMPONENT_RELATIONS, NDXImportPayload, NDX_OBJECT_CONFIG, ToolResult
 
 
 class NDXCompositeImporter:
@@ -47,11 +47,41 @@ class NDXCompositeImporter:
         if not isinstance(parent_id, int) or parent_id <= 0:
             return ToolResult(ok=False, message=f"Import NDX interrompu : le {config['label']} n’a retourné aucun identifiant.")
 
+        queue = [
+            (collection, endpoint, dict(component))
+            for collection, endpoint in self.ENDPOINTS.items()
+            for component in payload.component_templates.get(collection, [])
+        ]
+        resolved: dict[tuple[str, str], int] = {}
         processed = 0
-        for collection, endpoint in self.ENDPOINTS.items():
-            for component in payload.component_templates.get(collection, []):
-                result = self._create_or_reuse(endpoint, {**component, config["relation"]: parent_id})
+        while queue:
+            deferred = []
+            progress = False
+            for collection, endpoint, component in queue:
+                data = dict(component)
+                unresolved = False
+                for field, target_collection in NDX_COMPONENT_RELATIONS.get(collection, {}).items():
+                    reference = data.get(field)
+                    if isinstance(reference, str):
+                        target_id = resolved.get((target_collection, reference))
+                        if target_id is None:
+                            unresolved = True
+                            break
+                        data[field] = target_id
+                if unresolved:
+                    deferred.append((collection, endpoint, component))
+                    continue
+                result = self._create_or_reuse(endpoint, {**data, config["relation"]: parent_id})
                 if not result.ok:
                     return result
+                component_id = result.data.get("id") if isinstance(result.data, dict) else None
+                if not isinstance(component_id, int) or component_id <= 0:
+                    return ToolResult(ok=False, message=f"Import NDX interrompu : le template {component.get('name')} n’a retourné aucun identifiant.")
+                resolved[(collection, str(component["name"]))] = component_id
                 processed += 1
+                progress = True
+            if deferred and not progress:
+                names = [str(component.get("name")) for _, _, component in deferred]
+                return ToolResult(ok=False, message=f"Import NDX interrompu : références de composants non résolues pour {', '.join(names)}.", data={"unresolved_components": names})
+            queue = deferred
         return ToolResult(ok=True, message=f"Import NDX {config['label']} terminé : {processed} templates traités.", data={"id": parent_id, "object_type": payload.object_type, "templates_processed": processed})

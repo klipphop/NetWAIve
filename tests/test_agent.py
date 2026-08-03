@@ -214,17 +214,41 @@ def test_composite_ndx_import_is_one_pending_action_and_executes_all_templates()
     class CompositeTools(FakeTools):
         def execute(self, name, arguments):
             if name == "netbox_read" and arguments.get("app") == "ndx":
-                return ToolResult(ok=True, message="NDX chargé", data={"device_type":{"model":"Catalyst 9300-24P","slug":"c9300-24p","u_height":1},"manufacturer":"Cisco Systems","component_templates":{"interfaces":[{"name":f"Gi1/0/{i}"} for i in range(1,28)],"console-ports":[{"name":"Console"}],"power-ports":[]}})
+                return ToolResult(ok=True, message="NDX chargé", data={
+                    "object_type": "device-type",
+                    "parent": {"model":"Catalyst 9300-24P","slug":"c9300-24p","u_height":1},
+                    "manufacturer":"Cisco Systems",
+                    "component_templates":{"interfaces":[{"name":f"Gi1/0/{i}"} for i in range(1,28)],"console-ports":[{"name":"Console"}],"power-ports":[]},
+                })
             return super().execute(name, arguments)
-        def import_ndx_devicetype(self, arguments):
+        def import_ndx_object(self, arguments):
             payload = arguments["payload"]
+            assert payload["object_type"] == "device-type"
             assert len(payload["component_templates"]["interfaces"]) == 27
-            return ToolResult(ok=True, message="Import NDX terminé", data={"templates_created":27})
+            return ToolResult(ok=True, message="Import NDX terminé", data={"templates_processed":27})
     read = tool_call("netbox_read", {"app":"ndx","endpoint":"spec","method":"get","kwargs":{"model":"C9300-24P"}}, "ndx-read")
     result = NetBoxAgent(settings(), tools=CompositeTools(), client=FakeClient([Message(tool_calls=[read]), Message("Plan prêt")])).run("Importe C9300-24P depuis NDX")
     assert len(result.pending_confirmation) == 1
-    assert result.pending_confirmation[0].name == "import_ndx_devicetype"
+    assert result.pending_confirmation[0].name == "import_ndx_object"
     assert "Import NDX" in result.message
+
+
+def test_direct_module_type_create_is_bound_to_complete_ndx_composite():
+    class ModuleTools(FakeTools):
+        def prepare_ndx_object(self, data, object_type):
+            assert object_type == "module-type"
+            return ToolResult(ok=True, message="spec", data={"composite":{"type":"import_ndx_object","payload":{
+                "object_type":"module-type",
+                "manufacturer":"Generic",
+                "parent":{"model":"PSU-1000","part_number":"P-1000"},
+                "component_templates":{"power-ports":[{"name":"Power Input"}]},
+            }}})
+    write = tool_call("netbox_write", {"app":"dcim","endpoint":"module-types","action":"create","data":{"model":"PSU-1000"}}, "create-module-type")
+    result = NetBoxAgent(settings(), tools=ModuleTools(), client=FakeClient([Message(tool_calls=[write]), Message("Plan prêt"), Message("Plan final")])).run("Crée PSU-1000")
+    assert len(result.pending_confirmation) == 1
+    assert result.pending_confirmation[0].name == "import_ndx_object"
+    assert result.pending_confirmation[0].arguments["payload"]["component_templates"]["power-ports"]
+    assert "ModuleType" in result.message
 
 
 def test_only_three_universal_tools_are_exposed():

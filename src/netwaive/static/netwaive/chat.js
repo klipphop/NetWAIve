@@ -110,6 +110,7 @@
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
+      if (data.reset) messages.replaceChildren();
       add("assistant", data.message || data.answer || JSON.stringify(data));
       renderPendingControls();
     };
@@ -133,16 +134,20 @@
 
   clearButton?.addEventListener("click", async () => {
     const token = document.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
-    messages.replaceChildren();
-    conversationId = null;
-    pendingWrite = null;
-    renderPendingControls();
-    const response = await fetch("/plugins/netwaive/api/history/clear/", {
-      method: "POST",
-      headers: { "X-CSRFToken": token, "Cache-Control": "no-store" },
-    });
-    const data = await response.json();
-    conversationId = data.active_session_id || null;
+    try {
+      const response = await fetch("/plugins/netwaive/api/reset/", {
+        method: "POST",
+        headers: { "X-CSRFToken": token, "Cache-Control": "no-store" },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Reset impossible");
+      messages.replaceChildren();
+      conversationId = data.active_session_id || null;
+      pendingWrite = data.pending_write || null;
+      renderPendingControls();
+    } catch (error) {
+      add("assistant", `Erreur reset : ${error.message}`);
+    }
   });
 
   fetch("/plugins/netwaive/api/history/", { credentials: "same-origin" })
@@ -186,6 +191,7 @@
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
+      if (data.reset) messages.replaceChildren();
       add("assistant", data.message || data.answer || JSON.stringify(data));
       renderPendingControls();
     } catch (error) {

@@ -17,6 +17,7 @@ from .models import (
     NetBoxReadArgs,
     NetBoxWriteArgs,
     NDXImportPayload,
+    NDX_OBJECT_CONFIG,
     ToolResult,
 )
 from .ndx import NDXConnector
@@ -195,18 +196,22 @@ class NetBoxTools:
     def _read_ndx_spec(self, args: NetBoxReadArgs) -> ToolResult:
         query = args.merged_kwargs()
         model = query.get("model") or query.get("part_number")
+        endpoint = self._normalize(args.endpoint)
+        object_type = str(query.get("object_type") or ("module-type" if endpoint in {"moduletypes", "moduletype"} else "device-type"))
         candidates = self.ndx.search(model)
-        payload = self.ndx.build_payload(model)
+        payload = self.ndx.build_payload(model, object_type=object_type)
         if payload is None:
             return ToolResult(ok=False, message="NDX exige une référence exacte avant import.", data={"candidates": candidates})
         validated = NDXImportPayload.model_validate(payload)
-        if validated.interface_count() == 0:
+        if validated.component_count() == 0:
+            return ToolResult(ok=False, message="Spec NDX incomplète : aucun composant publié.", data={"reason": "empty_component_templates"})
+        if NDX_OBJECT_CONFIG[object_type]["requires_interfaces"] and validated.interface_count() == 0:
             return ToolResult(ok=False, message="Spec NDX incomplète : aucune interface publiée.", data={"reason": "empty_interface_templates"})
         return ToolResult(ok=True, message="Spec NDX exacte chargée.", data=payload)
 
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""
-        if self._normalize(args.app) == "ndx" and self._normalize(args.endpoint) in {"spec", "device-types", "devicetypes"}:
+        if self._normalize(args.app) == "ndx" and self._normalize(args.endpoint) in {"spec", "devicetypes", "devicetype", "moduletypes", "moduletype"}:
             return self._read_ndx_spec(args)
         if self._normalize(args.app) == "ndx":
             return self._read_ndx(args)
@@ -351,18 +356,20 @@ class NetBoxTools:
                 return ToolResult(ok=False, message="Valeur invalide : " + json.dumps({"field": field, "value": value, "choices": enum}, ensure_ascii=False), data={"invalid_field": field, "choices": enum})
         return None
 
-    def prepare_ndx_device_type(self, data: dict[str, Any]) -> ToolResult:
+    def prepare_ndx_object(self, data: dict[str, Any], object_type: str) -> ToolResult:
         model = str(data.get("model") or data.get("name") or "").strip()
         candidates = self.ndx.search(model)
-        payload = self.ndx.build_payload(model)
+        payload = self.ndx.build_payload(model, object_type=object_type)
         if payload is None:
             return ToolResult(ok=False, message=f"NDX retourne {len(candidates)} modèles. Sélectionne la référence exacte avant création.", data={"ndx_candidates": candidates})
         validated = NDXImportPayload.model_validate(payload)
-        if validated.interface_count() == 0:
+        if validated.component_count() == 0:
+            return ToolResult(ok=False, message="Spec NDX incomplète : aucun composant publié.", data={"reason": "empty_component_templates"})
+        if NDX_OBJECT_CONFIG[object_type]["requires_interfaces"] and validated.interface_count() == 0:
             return ToolResult(ok=False, message="Spec NDX incomplète : aucune interface publiée.", data={"reason": "empty_interface_templates"})
-        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"composite": {"type": "import_ndx_devicetype", "payload": payload}, "selected": self.ndx.exact(model, candidates)})
+        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"composite": {"type": "import_ndx_object", "payload": payload}, "selected": self.ndx.exact(model, candidates, object_type=object_type)})
 
-    def import_ndx_devicetype(self, arguments: dict[str, Any]) -> ToolResult:
+    def import_ndx_object(self, arguments: dict[str, Any]) -> ToolResult:
         """Délègue l'exécution du DTO composite NDX validé."""
         raw_payload = dict(arguments.get("payload") or {}) if isinstance(arguments.get("payload"), dict) else {}
         return NDXCompositeImporter(self.find_existing_create, self.execute).run(raw_payload)

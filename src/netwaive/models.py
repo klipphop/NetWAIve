@@ -4,13 +4,34 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+NDX_OBJECT_CONFIG = {
+    "device-type": {
+        "endpoint": "device-types",
+        "relation": "device_type",
+        "directory": "device-types",
+        "label": "DeviceType",
+        "requires_interfaces": True,
+    },
+    "module-type": {
+        "endpoint": "module-types",
+        "relation": "module_type",
+        "directory": "module-types",
+        "label": "ModuleType",
+        "requires_interfaces": False,
+    },
+}
 NDX_COMPONENT_ENDPOINTS = {
     "interfaces": "interface-templates",
     "power-ports": "power-port-templates",
     "console-ports": "console-port-templates",
+    "console-server-ports": "console-server-port-templates",
+    "power-outlets": "power-outlet-templates",
+    "front-ports": "front-port-templates",
+    "rear-ports": "rear-port-templates",
     "module-bays": "module-bay-templates",
+    "device-bays": "device-bay-templates",
+    "inventory-items": "inventory-item-templates",
 }
-
 
 class NetBoxReadArgs(BaseModel):
     """Lecture universelle d'un endpoint NetBox."""
@@ -51,12 +72,23 @@ class ToolResult(BaseModel):
     data: Any = None
 
 
-class NDXDeviceTypeDTO(BaseModel):
+class NDXParentDTO(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: NonEmptyStr
-    slug: NonEmptyStr
-    u_height: float = Field(default=1, gt=0)
+    slug: NonEmptyStr | None = None
+    part_number: str = ""
+    u_height: float | None = Field(default=None, gt=0)
+    airflow: str | None = None
+    weight: float | None = None
+    weight_unit: str | None = None
+    description: str | None = None
+    comments: str | None = None
+    attributes: dict[str, Any] | None = None
+    profile: str | None = None
+    exclude_from_utilization: bool | None = None
+    is_full_depth: bool | None = None
+    subdevice_role: str | None = None
     front_image: Any = None
     rear_image: Any = None
 
@@ -64,8 +96,9 @@ class NDXDeviceTypeDTO(BaseModel):
 class NDXImportPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    object_type: Literal["device-type", "module-type"]
     manufacturer: NonEmptyStr
-    device_type: NDXDeviceTypeDTO
+    parent: NDXParentDTO
     component_templates: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
 
     @field_validator("component_templates")
@@ -83,6 +116,9 @@ class NDXImportPayload(BaseModel):
 
     def interface_count(self) -> int:
         return len(self.component_templates.get("interfaces", []))
+
+    def component_count(self) -> int:
+        return sum(len(items) for items in self.component_templates.values())
 
 
 class PendingToolCall(BaseModel):

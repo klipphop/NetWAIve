@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.13] - 2026-08-03
+
+### Added
+- Added complete NDX ModuleType ingestion with automatic Manufacturer inclusion and parent-scoped component templates.
+- Added a dedicated backend reset endpoint used exclusively by the existing UI Reset buttons.
+
+### Changed
+- Generalized the composite NDX DTO and executor for DeviceTypes and ModuleTypes.
+- Made exact NDX imports complete by default in one confirmation step, with no minimal/full or separate Manufacturer prompt.
+
+### Fixed
+- Reset now purges every server-side NetWAIve session, message history, pending write, and session authorization flag before clearing the UI.
+- Removed chat `/reset` and `/clear` command handling and the legacy history-clear endpoint.
+- Preserved complete parent metadata including part number, height, airflow, weight, and supported component collections.
+
+### Tests
+- Added backend reset, backend-first UI reset, automatic Manufacturer, direct ModuleType binding, and complete ModuleType import coverage.
+
 ## [0.4.12] - 2026-08-03
 
 ### Changed

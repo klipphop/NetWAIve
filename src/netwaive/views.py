@@ -20,6 +20,8 @@ MAX_HISTORY = 100
 MAX_SESSIONS = 8
 
 
+
+
 def _plugin_config() -> dict[str, Any]:
     configs = getattr(django_settings, "PLUGINS_CONFIG", {}) or {}
     return dict(configs.get("netwaive", {}) or {})
@@ -42,7 +44,7 @@ def _agent_settings() -> Settings:
 def _default_state() -> dict[str, Any]:
     session_id = str(uuid.uuid4())
     return {
-        "sessions": [{"id": session_id, "title": "Session 1", "history": [], "pending_write": None}],
+        "sessions": [{"id": session_id, "title": "Session 1", "history": [], "pending_write": None, "allow_session": False}],
         "active_session_id": session_id,
         "ui": {"open": True, "layout": "docked", "width": 320},
     }
@@ -60,6 +62,16 @@ def _load_state(request) -> dict[str, Any]:
 def _save_state(request, state: dict[str, Any]) -> None:
     request.session[SESSION_KEY] = state
     request.session.modified = True
+
+
+def _purge_agent_state(request) -> dict[str, Any]:
+    """Supprime tout état NetWAIve sans invalider la session d’authentification Django."""
+    request.session.pop(SESSION_KEY, None)
+    state = _default_state()
+    _save_state(request, state)
+    return state
+
+
 
 
 def _active_session(state: dict[str, Any], requested_id: str | None = None) -> dict[str, Any]:
@@ -103,7 +115,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.4.12", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.4.13", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -140,12 +152,12 @@ def chat_api(request):
     message = str(body.get("message") or "").strip()
     if not message:
         return JsonResponse({"error": "Message vide."}, status=400)
+    normalized = message.casefold()
 
     state = _load_state(request)
     active = _active_session(state, str(body.get("conversation_id") or "") or None)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
     agent = NetBoxAgent(_agent_settings())
-    normalized = message.lower().strip()
     language = NetBoxAgent._detect_language(message)
     approved = bool(body.get("approve_pending"))
     approval_scope = str(body.get("approval_scope") or "once")
@@ -215,7 +227,7 @@ def chat_api(request):
 @require_POST
 def session_new_api(request):
     state = _load_state(request)
-    new_session = {"id": str(uuid.uuid4()), "title": f"Session {len(state['sessions']) + 1}", "history": [], "pending_write": None}
+    new_session = {"id": str(uuid.uuid4()), "title": f"Session {len(state['sessions']) + 1}", "history": [], "pending_write": None, "allow_session": False}
     state["sessions"].append(new_session)
     state["sessions"] = state["sessions"][-MAX_SESSIONS:]
     state["active_session_id"] = new_session["id"]
@@ -253,14 +265,12 @@ def session_delete_api(request):
 
 @login_required
 @require_POST
-def history_clear_api(request):
-    # Reset total : supprime toutes les conversations, pending writes et contexte serveur.
-    request.session.pop(SESSION_KEY, None)
-    state = _default_state()
-    _save_state(request, state)
+def reset_api(request):
+    state = _purge_agent_state(request)
     response = JsonResponse(_state_payload(state))
     response["Cache-Control"] = "no-store"
     return response
+
 
 
 @login_required

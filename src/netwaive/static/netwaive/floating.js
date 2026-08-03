@@ -37,7 +37,7 @@
       newSession: "/plugins/netwaive/api/sessions/new/",
       selectSession: "/plugins/netwaive/api/sessions/select/",
       deleteSession: "/plugins/netwaive/api/sessions/delete/",
-      clearSession: "/plugins/netwaive/api/history/clear/",
+      reset: "/plugins/netwaive/api/reset/",
       chat: "/plugins/netwaive/api/chat/",
       health: "/plugins/netwaive/api/health/",
       ui: "/plugins/netwaive/api/ui/",
@@ -384,28 +384,23 @@
 
     clearBtn?.addEventListener("click", async (event) => {
       event.stopPropagation();
-      state.history = [];
-      state.pendingWrite = null;
-      renderConversation();
-      saveUi({ open: true, layout: state.layout });
       try {
-        const r = await fetch(api.clearSession, {
+        const r = await fetch(api.reset, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ session_id: state.activeSessionId }),
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrf(), "Cache-Control": "no-store" },
+          body: JSON.stringify({}),
         });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || "Impossible d'effacer la session");
-        state.sessions = data.sessions || state.sessions;
-        state.activeSessionId = data.active_session_id || state.activeSessionId;
+        if (!r.ok) throw new Error(data.error || "Reset impossible");
+        state.sessions = data.sessions || [];
+        state.activeSessionId = data.active_session_id || null;
         state.history = data.history || [];
-        state.pendingWrite = null;
+        state.pendingWrite = data.pending_write || null;
         state.ui = { ...state.ui, ...(data.ui || {}) };
         renderTabs();
         renderConversation();
       } catch (error) {
-        state.history = [];
-        renderConversation();
+        addMessage("assistant", `Erreur reset : ${error.message}`);
       }
     });
 
@@ -526,6 +521,7 @@
         state.ui = { ...state.ui, ...(data.ui || {}) };
         renderTabs();
         renderConversation();
+        if (data.reset && data.message) addMessage("assistant", data.message);
       } catch (error) {
         addMessage("assistant", `Erreur : ${error.message}`);
       } finally {

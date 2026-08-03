@@ -9,6 +9,6 @@ urlpatterns = [
     path("api/sessions/new/", views.session_new_api, name="session_new"),
     path("api/sessions/select/", views.session_select_api, name="session_select"),
     path("api/sessions/delete/", views.session_delete_api, name="session_delete"),
-    path("api/history/clear/", views.history_clear_api, name="history_clear"),
+    path("api/reset/", views.reset_api, name="reset"),
     path("api/health/", views.health_api, name="health"),
 ]

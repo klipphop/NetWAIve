@@ -8,13 +8,19 @@ import requests
 import yaml
 
 from .errors import NetBoxChatError
+from .models import NDX_COMPONENT_ENDPOINTS, NDX_OBJECT_CONFIG
 
 
 class NDXConnector:
     INDEX_URL = "https://netboxlabs.com/ndx/data/search-index.json"
     VENDORS_URL = "https://netboxlabs.com/ndx/data/vendors.json"
     LIBRARY_REPO_API = "https://api.github.com/repos/netbox-community/devicetype-library"
-    COMPONENT_KEYS = ("interfaces", "power-ports", "console-ports", "module-bays")
+    COMPONENT_KEYS = tuple(NDX_COMPONENT_ENDPOINTS)
+    PARENT_FIELDS = (
+        "model", "slug", "part_number", "u_height", "airflow", "weight", "weight_unit",
+        "description", "comments", "attributes", "profile", "exclude_from_utilization",
+        "is_full_depth", "subdevice_role", "front_image", "rear_image",
+    )
 
     def __init__(self, session: Any = requests):
         self.session = session
@@ -113,18 +119,19 @@ class NDXConnector:
             raise NetBoxChatError("La source de specs NDX ne publie aucune branche par défaut.")
         return branch
 
-    def load_spec(self, item: dict[str, Any]) -> dict[str, Any]:
+    def load_spec(self, item: dict[str, Any], object_type: str) -> dict[str, Any]:
         components = item.get("component_templates")
-        if isinstance(components, dict) and components.get("interfaces"):
-            return components
+        if isinstance(components, dict) and any(isinstance(values, list) and values for values in components.values()):
+            return {**item, **components}
         source = str(item.get("source") or "").casefold()
         if source not in {"community", "both"}:
             return {}
         vendor = str(item.get("manufacturer") or "").strip()
         if not vendor:
             return {}
+        config = NDX_OBJECT_CONFIG[object_type]
         branch = self._default_branch()
-        listing_url = f"{self.LIBRARY_REPO_API}/contents/device-types/{quote(vendor, safe='')}?ref={quote(branch, safe='')}"
+        listing_url = f"{self.LIBRARY_REPO_API}/contents/{config['directory']}/{quote(vendor, safe='')}?ref={quote(branch, safe='')}"
         listing = self._json(listing_url, timeout=15)
         identifiers = {
             self.normalize(item.get("model")),
@@ -148,22 +155,33 @@ class NDXConnector:
         raw = yaml.safe_load(response.text) or {}
         if not isinstance(raw, dict):
             return {}
-        return {key: value for key, value in raw.items() if key in self.COMPONENT_KEYS and isinstance(value, list)}
+        return raw
 
-    def build_payload(self, query: Any) -> dict[str, Any] | None:
+    def build_payload(self, query: Any, object_type: str = "device-type") -> dict[str, Any] | None:
+        if object_type not in NDX_OBJECT_CONFIG:
+            raise NetBoxChatError(f"Type NDX non supporté : {object_type}")
         candidates = self.search(query)
-        item = self.exact(query, candidates)
+        item = self.exact(query, candidates, object_type=object_type)
         if item is None:
             return None
-        components = self.load_spec(item)
+        raw = self.load_spec(item, object_type)
         vendor = self.resolve_vendor(item.get("manufacturer") or item.get("vendor_name"))
-        manufacturer = str(item.get("manufacturer") or (vendor or {}).get("display_name") or item.get("vendor_name") or "")
+        manufacturer = str(raw.get("manufacturer") or item.get("manufacturer") or (vendor or {}).get("display_name") or item.get("vendor_name") or "")
+        merged = {**item, **raw}
+        parent = {key: merged.get(key) for key in self.PARENT_FIELDS if merged.get(key) is not None}
+        parent["model"] = parent.get("model") or item.get("model") or item.get("part_number")
+        if object_type == "device-type":
+            parent["slug"] = parent.get("slug") or re.sub(r"[^a-z0-9]+", "-", str(parent["model"]).casefold()).strip("-")
+            parent["u_height"] = parent.get("u_height") or 1
+        else:
+            parent.pop("slug", None)
+            parent.pop("u_height", None)
+            parent.pop("front_image", None)
+            parent.pop("rear_image", None)
+        components = {key: raw.get(key, []) for key in self.COMPONENT_KEYS if isinstance(raw.get(key), list)}
         return {
+            "object_type": object_type,
             "manufacturer": manufacturer,
-            "device_type": {
-                "model": item.get("model") or item.get("part_number"),
-                "slug": item.get("slug") or re.sub(r"[^a-z0-9]+", "-", str(item.get("model") or item.get("part_number") or "").casefold()).strip("-"),
-                "u_height": item.get("u_height") or 1,
-            },
+            "parent": parent,
             "component_templates": components,
         }

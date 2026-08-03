@@ -64,7 +64,7 @@ def test_exact_multivendor_specs_build_composite_payload(part_number):
     connector = NDXConnector(CatalogSession())
     payload = connector.build_payload(part_number)
     assert payload is not None
-    assert payload["device_type"]["slug"]
+    assert payload["parent"]["slug"]
     assert len(payload["component_templates"]["interfaces"]) == 1
 
 
@@ -136,13 +136,14 @@ def test_exact_match_rejects_non_device_types():
     connector = NDXConnector(CatalogSession())
     candidates = [{"type":"module-type","model":"MOD-1","part_number":"MOD-1"}]
     assert connector.exact("MOD-1", candidates) is None
+    assert connector.exact("MOD-1", candidates, object_type="module-type") == candidates[0]
 
 
 @pytest.mark.parametrize("payload", [
-    {"manufacturer":" ","device_type":{"model":"M","slug":"m"},"component_templates":{"interfaces":[{"name":"p1"}]}},
-    {"manufacturer":"Generic","device_type":{"model":" ","slug":"m"},"component_templates":{"interfaces":[{"name":"p1"}]}},
-    {"manufacturer":"Generic","device_type":{"model":"M","slug":"m"},"component_templates":{"interfaces":[{}]}},
-    {"manufacturer":"Generic","device_type":{"model":"M","slug":"m"},"component_templates":{"unknown":[{"name":"x"}]}},
+    {"object_type":"device-type","manufacturer":" ","parent":{"model":"M","slug":"m"},"component_templates":{"interfaces":[{"name":"p1"}]}},
+    {"object_type":"device-type","manufacturer":"Generic","parent":{"model":" ","slug":"m"},"component_templates":{"interfaces":[{"name":"p1"}]}},
+    {"object_type":"device-type","manufacturer":"Generic","parent":{"model":"M","slug":"m"},"component_templates":{"interfaces":[{}]}},
+    {"object_type":"device-type","manufacturer":"Generic","parent":{"model":"M","slug":"m"},"component_templates":{"unknown":[{"name":"x"}]}},
 ])
 def test_ndx_dto_rejects_malformed_payloads(payload):
     with pytest.raises(ValueError):
@@ -153,15 +154,42 @@ def test_prepare_refuses_empty_component_spec_before_pending():
     class EmptyConnector:
         def search(self, query):
             return [{"model": query}]
-        def build_payload(self, query):
-            return {"manufacturer":"Generic Networks","device_type":{"model":query,"slug":"generic-model","u_height":1},"component_templates":{}}
-        def exact(self, query, candidates):
+        def build_payload(self, query, object_type="device-type"):
+            return {"object_type":object_type,"manufacturer":"Generic Networks","parent":{"model":query,"slug":"generic-model","u_height":1},"component_templates":{}}
+        def exact(self, query, candidates, object_type="device-type"):
             return candidates[0]
     tools = NetBoxTools.__new__(NetBoxTools)
     tools.ndx = EmptyConnector()
-    result = tools.prepare_ndx_device_type({"model":"Generic Model"})
+    result = tools.prepare_ndx_object({"model":"Generic Model"}, "device-type")
     assert not result.ok
-    assert result.data["reason"] == "empty_interface_templates"
+    assert result.data["reason"] == "empty_component_templates"
+
+
+def test_module_type_import_is_complete_and_auto_includes_manufacturer():
+    record = {"vendor_name":"Generic Networks","manufacturer":"Generic","model":"PSU-1000","part_number":"PSU-1000","slug":"psu-1000","type":"module-type","source":"community"}
+    class ModuleSession(CatalogSession):
+        def get(self, url, timeout):
+            if url.endswith("vendors.json"): return Response([{"display_name":"Generic Networks","slug":"generic"}])
+            if url.endswith("search-index.json"): return Response([record])
+            if url.endswith("/repos/netbox-community/devicetype-library"): return Response({"default_branch":"master"})
+            if "/contents/module-types/" in url: return Response([{"name":"PSU-1000.yaml","download_url":"https://spec.invalid/PSU-1000.yaml"}])
+            if url == "https://spec.invalid/PSU-1000.yaml": return Response(text="manufacturer: Generic\nmodel: PSU-1000\npart_number: P-1000\nairflow: front-to-rear\npower-ports:\n  - name: Power Input\n    type: dc-terminal\n")
+            raise AssertionError(url)
+
+    payload = NDXConnector(ModuleSession()).build_payload("PSU-1000", object_type="module-type")
+    assert payload["object_type"] == "module-type"
+    assert payload["parent"]["part_number"] == "P-1000"
+    assert payload["parent"]["airflow"] == "front-to-rear"
+    assert len(payload["component_templates"]["power-ports"]) == 1
+
+    writes = []
+    def execute(name, arguments):
+        writes.append(arguments)
+        return ToolResult(ok=True, message="ok", data={"id": len(writes)})
+    result = NDXCompositeImporter(lambda arguments: None, execute).run(payload)
+    assert result.ok
+    assert [item["endpoint"] for item in writes] == ["manufacturers", "module-types", "power-port-templates"]
+    assert writes[2]["data"]["module_type"] == 2
 
 
 def test_idempotence_scopes_children_to_parent_relation():
@@ -198,7 +226,7 @@ def test_idempotence_pushes_parent_filter_before_result_limit():
 def test_composite_rejects_blank_parent_identifier():
     def execute(name, arguments):
         return ToolResult(ok=True, message="ok", data={"id":""})
-    payload = {"manufacturer":"Generic","device_type":{"model":"M","slug":"m"},"component_templates":{"interfaces":[{"name":"p1"}]}}
+    payload = {"object_type":"device-type","manufacturer":"Generic","parent":{"model":"M","slug":"m"},"component_templates":{"interfaces":[{"name":"p1"}]}}
     result = NDXCompositeImporter(lambda arguments: None, execute).run(payload)
     assert not result.ok
 
@@ -235,8 +263,9 @@ def test_composite_executor_orders_parent_and_all_children_generically():
         writes.append(arguments)
         return ToolResult(ok=True, message="ok", data={"id": len(writes)})
     payload = {
+        "object_type":"device-type",
         "manufacturer":"Generic Networks",
-        "device_type":{"model":"Switch 48X","slug":"switch-48x","u_height":1,"front_image":"not-a-file"},
+        "parent":{"model":"Switch 48X","slug":"switch-48x","u_height":1,"front_image":"not-a-file"},
         "component_templates":{
             "interfaces":[{"name":"port1"},{"name":"port2"}],
             "power-ports":[{"name":"PSU1"}],

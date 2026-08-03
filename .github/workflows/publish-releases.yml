@@ -40,7 +40,7 @@ jobs:
             latest_tag="${GITHUB_REF_NAME}"
           else
             mapfile -t tags < <(git tag --list 'v*' --sort=v:refname)
-            latest_tag="v0.3.12"
+            latest_tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
           fi
 
           for tag in "${tags[@]}"; do

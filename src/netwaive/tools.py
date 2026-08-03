@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import requests
+import yaml
 import re
 from itertools import islice
 from typing import Any
@@ -203,15 +204,27 @@ class NetBoxTools:
         if len(exact) != 1:
             return ToolResult(ok=False, message="NDX exige une référence exacte avant import.", data={"candidates": candidates})
         item = exact[0]
-        device_type = {"model": item.get("model"), "slug": item.get("slug"), "u_height": item.get("u_height") or 1}
-        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"manufacturer": item.get("manufacturer") or item.get("vendor_name"), "device_type": device_type, "component_templates": item.get("component_templates") or {}})
+        components = item.get("component_templates") or {}
+        if not components:
+            vendor = str(item.get("manufacturer") or item.get("vendor_name") or "").strip()
+            part = str(item.get("part_number") or item.get("model") or "").strip()
+            slug_vendor = re.sub(r"[^A-Za-z0-9]+", "-", vendor).strip("-")
+            for branch in ("main", "master"):
+                url = f"https://raw.githubusercontent.com/netbox-community/devicetype-library/{branch}/device-types/{slug_vendor}/{part}.yaml"
+                response = requests.get(url, timeout=15)
+                if response.status_code == 200:
+                    raw = yaml.safe_load(response.text) or {}
+                    components = {key: value for key, value in raw.items() if key in {"interfaces", "power-ports", "console-ports", "module-bays"} and isinstance(value, list)}
+                    break
+        device_type = {"model": item.get("model") or item.get("part_number"), "slug": item.get("slug"), "u_height": item.get("u_height") or 1}
+        return ToolResult(ok=True, message="Spec NDX exacte chargée.", data={"manufacturer": item.get("manufacturer") or item.get("vendor_name"), "device_type": device_type, "component_templates": components})
 
     def netbox_read(self, args: NetBoxReadArgs) -> ToolResult:
         """Lecture universelle de n'importe quel endpoint NetBox."""
-        if self._normalize(args.app) == "ndx":
-            return self._read_ndx(args)
         if self._normalize(args.app) == "ndx" and self._normalize(args.endpoint) in {"spec", "device-types", "devicetypes"}:
             return self._read_ndx_spec(args)
+        if self._normalize(args.app) == "ndx":
+            return self._read_ndx(args)
         if self._normalize(args.app) == "ipam" and self._normalize(args.endpoint) in {"availableips", "prefixavailableips"}:
             return self._read_available_ips(args)
         endpoint, app_name, plugin, actual = self._resolve_endpoint(args.app, args.endpoint)
@@ -343,9 +356,13 @@ class NetBoxTools:
         payload = arguments.get("payload") if isinstance(arguments.get("payload"), dict) else {}
         manufacturer = str(payload.get("manufacturer") or "")
         device_type = dict(payload.get("device_type") or {})
-        collections = dict(payload.get("component_templates") or {})
+        components = dict(payload.get("component_templates") or {})
         if not manufacturer or not device_type.get("model"):
             return ToolResult(ok=False, message="DTO NDX incomplet.")
+        if len(components.get("interfaces", [])) == 0:
+            return ToolResult(ok=False, message="Import NDX refusé : la spec ne contient aucune interface.", data={"reason": "empty_interface_templates"})
+        aliases = {"ale": "Alcatel-Lucent Enterprise", "alcatel": "Alcatel-Lucent Enterprise", "cisco": "Cisco Systems"}
+        manufacturer = aliases.get(manufacturer.casefold(), manufacturer)
         existing = self.find_existing_create({"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name":manufacturer}})
         maker = existing or self.execute("netbox_write", {"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name": manufacturer}})
         if not maker.ok: return maker
@@ -358,6 +375,7 @@ class NetBoxTools:
         if not parent.ok: return parent
         parent_id = parent.data.get("id") if isinstance(parent.data, dict) else None
         endpoint_map = {"interfaces":"interface-templates", "power-ports":"power-port-templates", "console-ports":"console-port-templates", "module-bays":"module-bay-templates"}
+        collections = components
         created = 0
         for collection, endpoint in endpoint_map.items():
             for component in collections.get(collection, []):

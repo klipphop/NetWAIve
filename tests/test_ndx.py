@@ -160,6 +160,7 @@ def test_prepare_refuses_empty_component_spec_before_pending():
             return candidates[0]
     tools = NetBoxTools.__new__(NetBoxTools)
     tools.ndx = EmptyConnector()
+    tools._existing_ndx_parent = lambda model, object_type, manufacturer: None
     result = tools.prepare_ndx_object({"model":"Generic Model"}, "device-type")
     assert not result.ok
     assert result.data["reason"] == "empty_component_templates"

@@ -195,6 +195,7 @@ def test_ndx_catalog_search_returns_exact_candidate(monkeypatch):
         def json(self):
             return [{"vendor_name":"Cisco Systems","manufacturer":"Cisco","model":"Catalyst 9300-24P","part_number":"C9300-24P","slug":"cisco-c9300-24p","type":"device-type","component_templates":{"interfaces":[{"name":"GigabitEthernet1/0/1","type":"1000base-t"}]}}]
     monkeypatch.setattr("netwaive.ndx.requests.get", lambda url, timeout: Response())
+    monkeypatch.setattr(NetBoxTools, "_existing_ndx_parent", lambda self, model, object_type, manufacturer: None)
     result = NetBoxTools(settings()).netbox_read(NetBoxReadArgs(app="ndx", endpoint="catalog", method="get", kwargs={"query":"C9300-24P"}))
     assert result.ok
     assert result.data["parent"]["model"] == "Catalyst 9300-24P"

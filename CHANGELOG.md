@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0-P1] - 2026-08-03
+
+### Added
+- Added a deterministic Python resolver that enriches NetBox create payloads before OpenAPI validation.
+- Added live Device role resolution, preferring the existing `Switch` role and otherwise using the lowest stable live role ID.
+
+### Changed
+- NDX DeviceType and ModuleType workflows now query NetBox first and bypass the complete import when the parent object already exists.
+- Required slug fields discovered from the live OpenAPI schema are generated automatically from business names or models.
+
+### Tests
+- Added regression coverage for existing-parent NDX bypass, required-slug enrichment, preferred Device role resolution, and deterministic role fallback.
+
 ## [0.4.15] - 2026-08-03
 
 ### Fixed

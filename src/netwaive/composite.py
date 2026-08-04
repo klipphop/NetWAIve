@@ -15,9 +15,11 @@ class NDXCompositeImporter:
         self,
         find_existing: Callable[[dict[str, Any]], ToolResult | None],
         execute: Callable[[str, dict[str, Any]], ToolResult],
+        find_existing_parent: Callable[[str, str, str], ToolResult | None] | None = None,
     ):
         self.find_existing = find_existing
         self.execute = execute
+        self.find_existing_parent = find_existing_parent
 
     def _create_or_reuse(self, endpoint: str, data: dict[str, Any]) -> ToolResult:
         arguments = {"app": "dcim", "endpoint": endpoint, "action": "create", "data": data}
@@ -26,6 +28,22 @@ class NDXCompositeImporter:
     def run(self, raw_payload: dict[str, Any]) -> ToolResult:
         payload = NDXImportPayload.model_validate(raw_payload)
         config = NDX_OBJECT_CONFIG[payload.object_type]
+        existing_parent = (
+            self.find_existing_parent(payload.parent.model, payload.object_type, payload.manufacturer)
+            if self.find_existing_parent is not None
+            else self.find_existing({
+                "app": "dcim", "endpoint": config["endpoint"], "action": "create", "data": {"model": payload.parent.model},
+            })
+        )
+        if existing_parent is not None:
+            record = existing_parent.data if isinstance(existing_parent.data, dict) else {}
+            manufacturer = record.get("manufacturer")
+            manufacturer_name = str(manufacturer.get("name") or manufacturer.get("display") or manufacturer.get("slug") or "") if isinstance(manufacturer, dict) else ""
+            record_model = str(record.get("model") or "")
+            if record_model.casefold() != payload.parent.model.casefold() or manufacturer_name.casefold() != payload.manufacturer.casefold():
+                existing_parent = None
+        if existing_parent is not None:
+            return ToolResult(ok=True, message=f"{config['label']} déjà présent ; import NDX ignoré.", data={"skipped": True, "object_type": payload.object_type})
         if payload.component_count() == 0:
             return ToolResult(ok=False, message="Import NDX refusé : la spec ne contient aucun composant.", data={"reason": "empty_component_templates"})
         if config["requires_interfaces"] and payload.interface_count() == 0:

@@ -19,6 +19,7 @@ from .models import (
     NDXImportPayload,
     NDX_OBJECT_CONFIG,
     ToolResult,
+    netbox_slug,
 )
 from .ndx import NDXConnector
 
@@ -42,6 +43,7 @@ class NetBoxTools:
         )
         self.api.http_session.verify = settings.netbox_verify_ssl
         self.ndx = NDXConnector()
+        self.resolver_observed_ids: set[int] = set()
 
     def tool_schemas(self) -> list[dict[str, Any]]:
         descriptions = {
@@ -214,6 +216,12 @@ class NetBoxTools:
         payload = self.ndx.build_payload(model, object_type=object_type)
         if payload is None:
             return ToolResult(ok=False, message="NDX exige une référence exacte avant import.", data={"candidates": candidates})
+        try:
+            existing = self._existing_ndx_parent(str(payload["parent"]["model"]), object_type, str(payload["manufacturer"]))
+        except NetBoxChatError as exc:
+            return ToolResult(ok=False, message=str(exc), data={"reason": "netbox_lookup_failed"})
+        if existing is not None:
+            return ToolResult(ok=True, message="Objet NetBox déjà présent ; import NDX ignoré.", data={"bypass_ndx": True, "object_type": object_type, "existing": existing.data})
         validated = NDXImportPayload.model_validate(payload)
         if validated.component_count() == 0:
             return ToolResult(ok=False, message="Spec NDX incomplète : aucun composant publié.", data={"reason": "empty_component_templates"})
@@ -313,6 +321,70 @@ class NetBoxTools:
         record = self._safe(records[0])
         return ToolResult(ok=True, message="Objet existant réutilisé.", data=record)
 
+    def _existing_ndx_parent(self, model: str, object_type: str, manufacturer: str) -> ToolResult | None:
+        if not model or not manufacturer:
+            return None
+        endpoint = NDX_OBJECT_CONFIG[object_type]["endpoint"]
+        try:
+            endpoint_obj, _, _, _ = self._resolve_endpoint("dcim", endpoint)
+            records = list(islice(endpoint_obj.filter(model=model, limit=100), 100))
+        except Exception:
+            raise NetBoxChatError("Vérification NetBox impossible ; import NDX bloqué.") from None
+        wanted_model = self._normalize(model)
+        wanted = self._normalize(manufacturer)
+        for raw in records:
+            record = self._safe(raw)
+            if not isinstance(record, dict) or self._normalize(record.get("model")) != wanted_model:
+                continue
+            relation = record.get("manufacturer")
+            labels = []
+            if isinstance(relation, dict):
+                labels = [relation.get("name"), relation.get("display"), relation.get("slug")]
+            if wanted in {self._normalize(value) for value in labels if value}:
+                return ToolResult(ok=True, message="Objet existant réutilisé.", data=record)
+        return None
+
+    def _resolve_device_role(self) -> int | None:
+        endpoint, _, _, _ = self._resolve_endpoint("dcim", "device-roles")
+        records = list(islice(endpoint.filter(limit=1000), 1000))
+        candidates = [self._safe(record) for record in records]
+        candidates = [record for record in candidates if isinstance(record, dict) and isinstance(record.get("id"), int) and not isinstance(record.get("id"), bool) and int(record["id"]) > 0]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda record: int(record["id"]))
+        preferred = next((
+            record for record in candidates
+            if "switch" in {self._normalize(str(record.get(field) or "")) for field in ("name", "slug")}
+        ), None)
+        role_id = int((preferred or candidates[0])["id"])
+        self.resolver_observed_ids.add(role_id)
+        return role_id
+
+    def enrich_write_arguments(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Résout en Python les champs obligatoires déterministes avant le préflight."""
+        args = NetBoxWriteArgs.model_validate(arguments)
+        if args.action != "create":
+            return arguments
+        data = dict(args.data)
+        try:
+            schema_result = self.get_endpoint_schema(GetEndpointSchemaArgs(app=args.app, endpoint=args.endpoint))
+            schema = schema_result.data if schema_result.ok and isinstance(schema_result.data, dict) else {}
+        except Exception:
+            schema = {}
+        required = set(schema.get("required_fields") or [])
+        if "slug" in required and not data.get("slug"):
+            source = data.get("name") or data.get("model")
+            if source:
+                data["slug"] = netbox_slug(source)
+        if self._normalize(args.app) == "dcim" and self._normalize(args.endpoint) in {"device", "devices"} and not (data.get("role") or data.get("device_role")):
+            try:
+                role_id = self._resolve_device_role()
+            except Exception:
+                role_id = None
+            if role_id is not None:
+                data["role"] = role_id
+        return {"app": args.app, "endpoint": args.endpoint, "action": args.action, "data": data}
+
     def preflight_termination_collisions(self, arguments: dict[str, Any]) -> ToolResult | None:
         """Inspect every `*_terminations` relation and reject occupied live endpoints."""
         data = arguments.get("data") if isinstance(arguments.get("data"), dict) else {}
@@ -374,6 +446,12 @@ class NetBoxTools:
         payload = self.ndx.build_payload(model, object_type=object_type)
         if payload is None:
             return ToolResult(ok=False, message=f"NDX retourne {len(candidates)} modèles. Sélectionne la référence exacte avant création.", data={"ndx_candidates": candidates})
+        try:
+            existing = self._existing_ndx_parent(str(payload["parent"]["model"]), object_type, str(payload["manufacturer"]))
+        except NetBoxChatError as exc:
+            return ToolResult(ok=False, message=str(exc), data={"reason": "netbox_lookup_failed"})
+        if existing is not None:
+            return ToolResult(ok=True, message="Objet NetBox déjà présent ; import NDX ignoré.", data={"bypass_ndx": True, "object_type": object_type, "existing": existing.data})
         validated = NDXImportPayload.model_validate(payload)
         if validated.component_count() == 0:
             return ToolResult(ok=False, message="Spec NDX incomplète : aucun composant publié.", data={"reason": "empty_component_templates"})
@@ -384,7 +462,10 @@ class NetBoxTools:
     def import_ndx_object(self, arguments: dict[str, Any]) -> ToolResult:
         """Délègue l'exécution du DTO composite NDX validé."""
         raw_payload = dict(arguments.get("payload") or {}) if isinstance(arguments.get("payload"), dict) else {}
-        return NDXCompositeImporter(self.find_existing_create, self.execute).run(raw_payload)
+        try:
+            return NDXCompositeImporter(self.find_existing_create, self.execute, self._existing_ndx_parent).run(raw_payload)
+        except NetBoxChatError as exc:
+            return ToolResult(ok=False, message=str(exc), data={"reason": "netbox_lookup_failed"})
 
     def netbox_write(self, args: NetBoxWriteArgs) -> ToolResult:
         """Écriture universelle create/update/delete sur n'importe quel endpoint NetBox."""

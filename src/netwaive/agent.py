@@ -338,6 +338,15 @@ class NetBoxAgent:
                             data={"existing_object": True, "resource": resource},
                         )
         object_id = data.get("id") if isinstance(data, dict) else None
+        if action == "create" and target == ("dcim", "devices"):
+            role_id = data["role"] if "role" in data else data.get("device_role")
+            if isinstance(role_id, int) and not isinstance(role_id, bool) and role_id not in observed_ids:
+                message = (
+                    "ID de rôle Device non observé pendant les lectures live ; création refusée."
+                    if language == "fr"
+                    else "Device role ID was not observed in live reads; creation rejected."
+                )
+                return ToolResult(ok=False, message=message, data={"unobserved_role_id": True})
         if action in {"update", "delete"} and isinstance(object_id, int) and object_id not in observed_ids:
             message = (
                 "ID de cible non observé pendant les lectures live ; mutation refusée."
@@ -542,6 +551,10 @@ class NetBoxAgent:
                         messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
                         continue
                     arguments = self._resolve_available_references(arguments, tool_outputs)
+                    enricher = getattr(self.tools, "enrich_write_arguments", None)
+                    if callable(enricher):
+                        arguments = enricher(arguments)
+                        observed_ids.update(getattr(self.tools, "resolver_observed_ids", set()))
                     collision = None
                     collision_checker = getattr(self.tools, "preflight_termination_collisions", None)
                     if callable(collision_checker):

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0-P4] - 2026-08-04
+
+### Changed
+- Replaced the main chat system prompt with a concise intent-only contract focused on business values and direct Pending plans.
+- Delegated validation, enrichment, fallback selection, deduplication, typed references, and execution entirely to the Python runtime.
+- Clear create intents can now enter Pending directly; deterministic existence checks still run at confirmed execution and fail closed if NetBox cannot be queried.
+- Kept read-only provenance mandatory for updates and deletes, with target IDs scoped to the exact endpoint.
+- Simplified plan-repair instructions to complete business intent without exposing backend verification procedures.
+
+### Tests
+- Added prompt-contract coverage excluding existence, role, and slug heuristics.
+- Added direct create-intent coverage proving Pending generation without a preliminary read or unnecessary question.
+
 ## [0.5.0-P3] - 2026-08-04
 
 ### Fixed

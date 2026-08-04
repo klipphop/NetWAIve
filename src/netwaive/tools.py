@@ -299,7 +299,7 @@ class NetBoxTools:
             if records is None:
                 records = list(islice(endpoint.filter(limit=1000, **identities), 1000))
         except Exception:
-            return None
+            raise NetBoxChatError("Vérification NetBox impossible ; création bloquée par sécurité.") from None
         if context_ids:
             scoped = []
             for record in records:

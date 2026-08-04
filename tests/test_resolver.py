@@ -183,3 +183,17 @@ def test_ndx_lookup_and_import_hide_backend_exception_details():
     assert not result.ok
     assert result.data["reason"] == "netbox_lookup_failed"
     assert "SECRET_BACKEND_DETAIL" not in result.message
+
+
+def test_generic_create_dedup_lookup_fails_closed():
+    class BrokenEndpoint:
+        def filter(self, **kwargs):
+            raise RuntimeError("SECRET_BACKEND_DETAIL")
+
+    tools = object.__new__(NetBoxTools)
+    tools._resolve_endpoint = lambda app, endpoint: (BrokenEndpoint(), app, None, endpoint)
+    with pytest.raises(NetBoxChatError, match="création bloquée") as caught:
+        tools.find_existing_create({
+            "app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "LAB"}
+        })
+    assert "SECRET_BACKEND_DETAIL" not in str(caught.value)

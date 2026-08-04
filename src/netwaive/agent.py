@@ -307,15 +307,15 @@ class NetBoxAgent:
         observed_records: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
     ) -> ToolResult | None:
         target = cls._target_key(arguments)
-        if target not in read_targets:
+        data = arguments.get("data") if isinstance(arguments.get("data"), dict) else {}
+        action = str(arguments.get("action") or "").lower()
+        if target not in read_targets and action != "create":
             message = (
                 f"Contrôle RO obligatoire : lis d'abord {target[0]}/{target[1]} avec netbox_read avant de préparer cette mutation."
                 if language == "fr"
                 else f"Mandatory read-only check: call netbox_read on {target[0]}/{target[1]} before planning this mutation."
             )
             return ToolResult(ok=False, message=message, data={"strict_ro_check_required": True})
-        data = arguments.get("data") if isinstance(arguments.get("data"), dict) else {}
-        action = str(arguments.get("action") or "").lower()
         if action == "create":
             records = (observed_records or {}).get(target, [])
             identity_fields = ("name", "prefix", "address", "slug", "vid")
@@ -347,13 +347,28 @@ class NetBoxAgent:
                     else "Device role ID was not observed in live reads; creation rejected."
                 )
                 return ToolResult(ok=False, message=message, data={"unobserved_role_id": True})
-        if action in {"update", "delete"} and isinstance(object_id, int) and object_id not in observed_ids:
-            message = (
-                "ID de cible non observé pendant les lectures live ; mutation refusée."
-                if language == "fr"
-                else "Target ID was not observed in live reads; mutation rejected."
-            )
-            return ToolResult(ok=False, message=message, data={"unobserved_id": True})
+        if action in {"update", "delete"}:
+            if not isinstance(object_id, int) or isinstance(object_id, bool) or object_id <= 0:
+                message = (
+                    "ID de cible valide obligatoire pour cette mutation."
+                    if language == "fr"
+                    else "A valid target ID is required for this mutation."
+                )
+                return ToolResult(ok=False, message=message, data={"invalid_target_id": True})
+            scoped_ids = {
+                record_id
+                for record in (observed_records or {}).get(target, [])
+                if isinstance(record, dict)
+                for record_id in [record.get("id")]
+                if isinstance(record_id, int) and not isinstance(record_id, bool) and record_id > 0
+            }
+            if object_id not in scoped_ids:
+                message = (
+                    "ID de cible non observé sur cet endpoint pendant les lectures live ; mutation refusée."
+                    if language == "fr"
+                    else "Target ID was not observed on this endpoint during live reads; mutation rejected."
+                )
+                return ToolResult(ok=False, message=message, data={"unobserved_id": True})
         return None
 
     @staticmethod
@@ -526,7 +541,7 @@ class NetBoxAgent:
                         "role": "user",
                         "content": (
                             "Demande de mutation claire : ne réponds jamais par un accusé de réception ou une transition textuelle. "
-                            "Dans cette même boucle, appelle immédiatement les netbox_read nécessaires, puis prépare les netbox_write si l’action est requise. "
+                            "Dans cette même boucle, extrais l’intention et prépare immédiatement les netbox_write nécessaires. "
                             "Le runtime affichera lui-même la carte de confirmation uniquement lorsqu’un pending_write réel existe. "
                             "Si un prérequis manque réellement, pose une question précise ; sinon poursuis avec les outils maintenant."
                         ),
@@ -566,8 +581,8 @@ class NetBoxAgent:
                         messages.append({
                             "role": "user",
                             "content": (
-                                "Audit interne obligatoire : le plan courant contient des écritures mais doit couvrir l’objectif final initial. "
-                                "Continue maintenant les netbox_read et netbox_write nécessaires pour inclure chaque dépendance manquante et l’objet final. "
+                                "Le plan courant contient des écritures mais doit couvrir l’objectif final initial. "
+                                "Complète maintenant toutes les opérations métier et l’objet final demandés. "
                                 "Ne retourne aucun texte utilisateur avant le plan complet ; le runtime affichera la carte après ce tour."
                             ),
                         })
@@ -792,6 +807,7 @@ class NetBoxAgent:
         ordered, sanitation_errors = self._sanitize_plan(pending)
         if sanitation_errors:
             return AgentResponse(message="Plan refusé avant exécution : " + " ".join(sanitation_errors), tool_results=[])
+        language = self._detect_language(user_message)
         results: list[ToolResult] = []
         outputs: dict[str, dict[str, Any]] = {}
         failed_call: PendingToolCall | None = None
@@ -807,7 +823,17 @@ class NetBoxAgent:
                 try:
                     existing = self.tools.find_existing_create(arguments)
                 except Exception:
-                    existing = None
+                    result = ToolResult(
+                        ok=False,
+                        message=(
+                            "Unable to verify the current NetBox state; creation was blocked safely."
+                            if language == "en"
+                            else "Vérification de l’état NetBox impossible ; création bloquée par sécurité."
+                        ),
+                    )
+                    results.append(result)
+                    failed_call = call
+                    break
             if call.name == "import_ndx_object":
                 result = self.tools.import_ndx_object(arguments)
             else:
@@ -818,7 +844,6 @@ class NetBoxAgent:
                 failed_call = call
                 break
 
-        language = self._detect_language(user_message)
         if results and all(result.ok for result in results) and len(results) == len(ordered):
             message = (
                 f"{len(results)} approved operation(s) were executed successfully. The requested configuration is now in place."

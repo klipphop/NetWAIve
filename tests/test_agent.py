@@ -13,6 +13,7 @@ from netwaive.models import (
     PendingToolCall,
     ToolResult,
 )
+from netwaive.prompt import SYSTEM_PROMPT
 from netwaive.tools import NetBoxTools
 
 
@@ -66,6 +67,9 @@ class FakeTools:
 
     def tool_schemas(self):
         return [{"type": "function", "function": {"name": name, "parameters": model.model_json_schema()}} for name, model in self.ARG_MODELS.items()]
+
+    def find_existing_create(self, arguments) -> ToolResult | None:
+        return None
 
     def execute(self, name, arguments):
         if name == "netbox_read":
@@ -351,6 +355,68 @@ def test_theoretical_answer_without_tool():
     assert result.pending_confirmation == []
 
 
+def test_system_prompt_is_intent_only_and_delegates_backend_fallbacks():
+    prompt = SYSTEM_PROMPT.casefold()
+    assert len(SYSTEM_PROMPT) < 4000
+    assert "intention" in prompt
+    assert "runtime python" in prompt
+    assert "plan" in prompt
+    for forbidden in (
+        "avant chaque mutation",
+        "vérifier l'existence",
+        "vérifie l'absence",
+        "absence de doublon",
+        "device role",
+        "device-role",
+        "slug",
+        "déduis le rôle",
+    ):
+        assert forbidden not in prompt
+
+
+def test_clear_create_intent_produces_direct_pending_without_read_or_question():
+    write = tool_call("netbox_write", {
+        "app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "LAB-PARIS-02"}
+    }, "create-site")
+    messages = [Message(tool_calls=[write]), Message("Plan complet."), Message("Plan final.")]
+    client = FakeClient(messages)
+    result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Crée le site LAB-PARIS-02")
+    assert len(result.pending_confirmation) == 1
+    assert result.pending_confirmation[0].id == "create-site"
+    assert all(call.function.name != "netbox_read" for response in messages for call in response.tool_calls)
+    assert result.message.count("?") == 1
+    assert "Confirmez-vous" in result.message
+
+
+def test_direct_create_confirmation_deduplicates_and_fails_closed_on_lookup_error():
+    pending = [PendingToolCall(id="site", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "LAB-PARIS-02"}
+    })]
+
+    class ConfirmTools(FakeTools):
+        def __init__(self, fail=False):
+            self.fail = fail
+            self.executed = 0
+        def find_existing_create(self, arguments):
+            if self.fail:
+                raise RuntimeError("backend secret")
+            return ToolResult(ok=True, message="Site déjà présent", data={"name": "LAB-PARIS-02"})
+        def execute(self, name, arguments):
+            self.executed += 1
+            return ToolResult(ok=True, message="created")
+
+    existing_tools = ConfirmTools()
+    existing = NetBoxAgent(settings(), tools=existing_tools, client=FakeClient([])).confirm("confirme", pending)
+    assert existing.tool_results[0].ok
+    assert existing_tools.executed == 0
+
+    failed_tools = ConfirmTools(fail=True)
+    failed = NetBoxAgent(settings(), tools=failed_tools, client=FakeClient([])).confirm("confirme", pending)
+    assert not failed.tool_results[0].ok
+    assert failed_tools.executed == 0
+    assert "backend secret" not in failed.tool_results[0].message
+
+
 def test_write_request_cannot_return_a_prose_confirmation_without_live_plan():
     read = tool_call("netbox_read", {
         "app": "dcim", "endpoint": "sites", "method": "filter", "kwargs": {"name": "LAB-PARIS-01"}
@@ -602,11 +668,15 @@ def test_create_guard_blocks_an_existing_object_after_live_read():
     assert "aucune création supplémentaire" in result.message
 
 
-def test_write_guard_requires_live_read_and_observed_update_id():
-    args = {"app": "dcim", "endpoint": "devices", "action": "update", "data": {"id": 42, "name": "srv"}}
-    assert NetBoxAgent._write_guard(args, set(), set(), "en") is not None
-    assert NetBoxAgent._write_guard(args, {("dcim", "devices")}, set(), "en") is not None
-    assert NetBoxAgent._write_guard(args, {("dcim", "devices")}, {42}, "en") is None
+def test_write_guard_requires_endpoint_scoped_live_update_or_delete_target():
+    update = {"app": "dcim", "endpoint": "devices", "action": "update", "data": {"id": 42, "name": "srv"}}
+    target = {("dcim", "devices")}
+    assert NetBoxAgent._write_guard(update, set(), set(), "en") is not None
+    assert NetBoxAgent._write_guard(update, target, {42}, "en", {("dcim", "interfaces"): [{"id": 42}]}) is not None
+    assert NetBoxAgent._write_guard(update, target, {42}, "en", {("dcim", "devices"): [{"id": 42}]}) is None
+
+    missing = {"app": "dcim", "endpoint": "devices", "action": "delete", "data": {}}
+    assert NetBoxAgent._write_guard(missing, target, set(), "en", {("dcim", "devices"): []}) is not None
 
 
 def test_available_ips_uses_native_prefix_endpoint():

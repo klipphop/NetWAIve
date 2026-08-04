@@ -99,6 +99,39 @@ def test_inflight_chat_cannot_restore_state_after_reset(monkeypatch):
     assert_fresh(request.session[views.SESSION_KEY])
 
 
+def test_chat_converts_upstream_504_html_to_clean_json(monkeypatch):
+    import json
+
+    class Response:
+        def __init__(self, payload, status=200):
+            self.payload, self.status_code, self.headers = payload, status, {"Content-Type": "application/json"}
+        def __setitem__(self, key, value): self.headers[key] = value
+        def __getitem__(self, key): return self.headers[key]
+
+    class GatewayTimeout(RuntimeError):
+        status_code = 504
+
+    class Agent:
+        def __init__(self, settings): pass
+        @staticmethod
+        def _detect_language(message): return "fr"
+        def run(self, message, history=None):
+            raise GatewayTimeout("<html><h1>504 Gateway Time-out</h1></html>")
+
+    request = dirty_request()
+    request.body = json.dumps({"message": "Crée un site"}).encode()
+    request.user = SimpleNamespace()
+    monkeypatch.setattr(views, "JsonResponse", Response)
+    monkeypatch.setattr(views, "NetBoxAgent", Agent)
+    monkeypatch.setattr(views, "_agent_settings", lambda: None)
+    endpoint = views.chat_api
+    while hasattr(endpoint, "__wrapped__"): endpoint = endpoint.__wrapped__
+    response = endpoint(request)
+    assert response.status_code == 504
+    assert response.payload["code"] == "llm_gateway_timeout"
+    assert "<html" not in str(response.payload).casefold()
+
+
 def test_reset_endpoint_returns_fresh_public_state(monkeypatch):
     class Response:
         status_code = 200

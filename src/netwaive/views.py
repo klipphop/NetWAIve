@@ -21,6 +21,35 @@ MAX_HISTORY = 100
 MAX_SESSIONS = 8
 
 
+def _gateway_timeout_response(exc: Exception, language: str):
+    status = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    if status is None and response is not None:
+        status = getattr(response, "status_code", None)
+    text = str(exc).casefold()
+    is_timeout = status == 504 or "gateway time-out" in text or "gateway timeout" in text or "timed out" in text
+    if not is_timeout:
+        return None
+    message = (
+        "The AI provider timed out. No change was planned or executed; retry the request."
+        if language == "en"
+        else "Le fournisseur IA n’a pas répondu à temps. Aucune modification n’a été planifiée ou exécutée ; relancez la demande."
+    )
+    result = JsonResponse({"error": message, "code": "llm_gateway_timeout"}, status=504)
+    result["Cache-Control"] = "no-store"
+    return result
+
+
+def _safe_agent_call(callback, language: str):
+    try:
+        return callback(), None
+    except Exception as exc:
+        timeout_response = _gateway_timeout_response(exc, language)
+        if timeout_response is None:
+            raise
+        return None, timeout_response
+
+
 
 
 def _plugin_config() -> dict[str, Any]:
@@ -141,7 +170,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.5.0-P4", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.5.1-P2", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -184,8 +213,14 @@ def chat_api(request):
     request_generation = state["generation"]
     active = _active_session(state, str(body.get("conversation_id") or "") or None)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
-    agent = NetBoxAgent(_agent_settings())
     language = NetBoxAgent._detect_language(message)
+    try:
+        agent = NetBoxAgent(_agent_settings())
+    except Exception as exc:
+        timeout_response = _gateway_timeout_response(exc, language)
+        if timeout_response is not None:
+            return timeout_response
+        raise
     approved = bool(body.get("approve_pending"))
     approval_scope = str(body.get("approval_scope") or "once")
     execution_status = "none"
@@ -209,7 +244,12 @@ def chat_api(request):
                 active.pop("allow_session", None)
             calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
             pending_history = pending.get("history") if isinstance(pending.get("history"), list) else active.get("history", [])
-            result = agent.confirm(str(pending.get("message") or ""), calls, history=pending_history)
+            result, timeout_response = _safe_agent_call(
+                lambda: agent.confirm(str(pending.get("message") or ""), calls, history=pending_history), language
+            )
+            if timeout_response is not None:
+                return timeout_response
+            assert result is not None
             answer = result.message
             execution_status = "success" if len(result.tool_results) == len(calls) and all(item.ok for item in result.tool_results) else "failed"
             if execution_status == "success" and result.pending_confirmation:
@@ -222,11 +262,19 @@ def chat_api(request):
                 active["pending_write"] = None
     else:
         recent_history = list(active.get("history", []))[-16:]
-        result = agent.run(message, history=recent_history)
+        result, timeout_response = _safe_agent_call(lambda: agent.run(message, history=recent_history), language)
+        if timeout_response is not None:
+            return timeout_response
+        assert result is not None
         answer = result.message
         if result.pending_confirmation:
             if active.get("allow_session") and _can_write(request.user):
-                executed = agent.confirm(message, result.pending_confirmation, history=recent_history)
+                executed, timeout_response = _safe_agent_call(
+                    lambda: agent.confirm(message, result.pending_confirmation, history=recent_history), language
+                )
+                if timeout_response is not None:
+                    return timeout_response
+                assert executed is not None
                 answer = executed.message
                 execution_status = "success" if len(executed.tool_results) == len(result.pending_confirmation) and all(item.ok for item in executed.tool_results) else "failed"
                 active["pending_write"] = None

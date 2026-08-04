@@ -445,11 +445,32 @@ class NetBoxTools:
         return None
 
     def prepare_ndx_object(self, data: dict[str, Any], object_type: str) -> ToolResult:
-        model = str(data.get("model") or data.get("name") or "").strip()
+        model = str(data.get("model") or data.get("part_number") or "Generic").strip() or "Generic"
         candidates = self.ndx.search(model)
         payload = self.ndx.build_payload(model, object_type=object_type)
         if payload is None:
+            if not candidates:
+                manufacturer = data.get("manufacturer")
+                if isinstance(manufacturer, dict):
+                    manufacturer = manufacturer.get("name") or manufacturer.get("display") or manufacturer.get("slug")
+                manufacturer = str(manufacturer or "Generic").strip() or "Generic"
+                components = data.get("component_templates") or data.get("components") or {}
+                if not isinstance(components, dict):
+                    components = {}
+                return ToolResult(
+                    ok=True,
+                    message="Modèle absent de NDX ; création NetBox brute préparée.",
+                    data={
+                        "raw_fallback": {
+                            "model": model,
+                            "manufacturer": manufacturer,
+                            "component_templates": components,
+                            "u_height": data.get("u_height") or 1,
+                        }
+                    },
+                )
             return ToolResult(ok=False, message=f"NDX retourne {len(candidates)} modèles. Sélectionne la référence exacte avant création.", data={"ndx_candidates": candidates})
+
         try:
             existing = self._existing_ndx_parent(str(payload["parent"]["model"]), object_type, str(payload["manufacturer"]))
         except NetBoxChatError as exc:

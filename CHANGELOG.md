@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-P2] - 2026-08-04
+
+### Fixed
+- Convert upstream LLM HTTP 504 and gateway timeout failures into a stable JSON `llm_gateway_timeout` response.
+- Strip upstream HTML/error bodies and preserve pending/session state without executing changes.
+
+### Tests
+- Added chat API coverage proving a 504 HTML payload becomes clean JSON with HTTP 504.
+- Added Django to the `dev` optional dependency set so a clean `uv run --extra dev pytest` environment collects the full suite.
+
+## [0.5.1-P1] - 2026-08-04
+
+### Added
+- Added deterministic Zero-Ask Device auto-chaining for Manufacturer, DeviceType, component templates, Site, and Device in one Pending plan.
+- Added transparent raw NetBox fallback when an exact custom model is absent from NDX.
+- Added neutral `Generic` defaults for missing manufacturer/model intent.
+
+### Changed
+- Updated the short intent-only system prompt with Zero-Ask Completion, symbolic dependency chaining, and transparent raw fallback rules.
+- NDX parent reuse now returns the parent ID so a following Device step can consume `${call_id.data.id}`.
+
+### Tests
+- Added raw fallback, exact NDX-to-Device chaining, default manufacturer, symbolic relation, and full-plan confirmation coverage.
+
 ## [0.5.0-P4] - 2026-08-04
 
 ### Changed

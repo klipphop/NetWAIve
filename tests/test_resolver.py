@@ -185,6 +185,19 @@ def test_ndx_lookup_and_import_hide_backend_exception_details():
     assert "SECRET_BACKEND_DETAIL" not in result.message
 
 
+def test_ndx_miss_returns_transparent_raw_fallback():
+    class MissingNDX:
+        def search(self, model): return []
+        def build_payload(self, model, object_type="device-type"): return None
+
+    tools = object.__new__(NetBoxTools)
+    tools.ndx = MissingNDX()
+    result = tools.prepare_ndx_object({"model": "CUSTOM-48P"}, "device-type")
+    assert result.ok
+    assert result.data["raw_fallback"]["manufacturer"] == "Generic"
+    assert result.data["raw_fallback"]["model"] == "CUSTOM-48P"
+
+
 def test_generic_create_dedup_lookup_fails_closed():
     class BrokenEndpoint:
         def filter(self, **kwargs):

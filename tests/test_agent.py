@@ -361,6 +361,9 @@ def test_system_prompt_is_intent_only_and_delegates_backend_fallbacks():
     assert "intention" in prompt
     assert "runtime python" in prompt
     assert "plan" in prompt
+    assert "zero-ask completion" in prompt
+    assert "generic" in prompt
+    assert "plan netbox brut" in prompt
     for forbidden in (
         "avant chaque mutation",
         "vérifier l'existence",
@@ -386,6 +389,62 @@ def test_clear_create_intent_produces_direct_pending_without_read_or_question():
     assert all(call.function.name != "netbox_read" for response in messages for call in response.tool_calls)
     assert result.message.count("?") == 1
     assert "Confirmez-vous" in result.message
+
+
+def test_device_intent_auto_chains_raw_dependencies_without_question():
+    class RawFallbackTools(FakeTools):
+        def prepare_ndx_object(self, data, object_type):
+            return ToolResult(ok=True, message="fallback", data={
+                "raw_fallback": {
+                    "model": data.get("model"),
+                    "manufacturer": data.get("manufacturer") or "Generic",
+                    "component_templates": data.get("components") or {},
+                }
+            })
+
+    write = tool_call("netbox_write", {
+        "app": "dcim", "endpoint": "devices", "action": "create", "data": {
+            "name": "SW-CUSTOM-01", "model": "CUSTOM-48P", "site": "LAB-PARIS",
+            "components": {"interfaces": [{"name": "eth0", "type": "1000base-t"}]},
+        }
+    }, "create-device")
+    result = NetBoxAgent(
+        settings(),
+        tools=RawFallbackTools(),
+        client=FakeClient([Message(tool_calls=[write]), Message("Plan complet."), Message("Plan final.")]),
+    ).run("Crée SW-CUSTOM-01 modèle CUSTOM-48P sur LAB-PARIS")
+
+    calls = result.pending_confirmation
+    endpoints = [call.arguments["endpoint"] for call in calls]
+    assert set(endpoints) == {"manufacturers", "device-types", "interface-templates", "sites", "devices"}
+    assert endpoints.index("manufacturers") < endpoints.index("device-types") < endpoints.index("interface-templates") < endpoints.index("devices")
+    assert endpoints.index("sites") < endpoints.index("devices")
+    by_endpoint = {call.arguments["endpoint"]: call for call in calls}
+    assert by_endpoint["manufacturers"].arguments["data"]["name"] == "Generic"
+    assert by_endpoint["device-types"].arguments["data"]["manufacturer"] == "${create-device-manufacturer.data.id}"
+    assert by_endpoint["interface-templates"].arguments["data"]["device_type"] == "${create-device-type.data.id}"
+    assert by_endpoint["devices"].arguments["data"]["device_type"] == "${create-device-type.data.id}"
+    assert by_endpoint["devices"].arguments["data"]["site"] == "${create-device-site.data.id}"
+    assert "?" in result.message  # confirmation globale uniquement
+
+
+def test_device_intent_chains_exact_ndx_import_to_device():
+    class ExactNDXTools(FakeTools):
+        def prepare_ndx_object(self, data, object_type):
+            return ToolResult(ok=True, message="exact", data={
+                "composite": {"payload": {"object_type": "device-type", "manufacturer": "Acme", "parent": {"model": data["model"]}, "component_templates": {}}}
+            })
+
+    write = tool_call("netbox_write", {
+        "app": "dcim", "endpoint": "devices", "action": "create",
+        "data": {"name": "SW-NDX-01", "model": "NDX-48P"},
+    }, "create-ndx-device")
+    result = NetBoxAgent(
+        settings(), tools=ExactNDXTools(),
+        client=FakeClient([Message(tool_calls=[write]), Message("Plan complet."), Message("Plan final.")]),
+    ).run("Crée SW-NDX-01 modèle NDX-48P")
+    assert [call.name for call in result.pending_confirmation] == ["import_ndx_object", "netbox_write"]
+    assert result.pending_confirmation[-1].arguments["data"]["device_type"] == "${create-ndx-device-type.data.id}"
 
 
 def test_direct_create_confirmation_deduplicates_and_fails_closed_on_lookup_error():

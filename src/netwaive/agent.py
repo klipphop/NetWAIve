@@ -8,7 +8,7 @@ from openai import OpenAI
 from pydantic import ValidationError
 
 from .config import Settings
-from .models import AgentResponse, PendingToolCall, ToolResult
+from .models import AgentResponse, NDX_COMPONENT_ENDPOINTS, PendingToolCall, ToolResult
 from .prompt import SYSTEM_PROMPT
 from .tools import NetBoxTools
 
@@ -498,6 +498,136 @@ class NetBoxAgent:
 
         return REFERENCE_RE.sub(replace, value)
 
+    def _pending_write_call(self, call_id: str, arguments: dict[str, Any]) -> tuple[PendingToolCall | None, ToolResult | None]:
+        enrich = getattr(self.tools, "enrich_write_arguments", None)
+        if callable(enrich):
+            arguments = enrich(arguments)
+        validate_payload = getattr(self.tools, "validate_write_payload", None)
+        validation_error = validate_payload(arguments) if callable(validate_payload) else None
+        if validation_error is not None:
+            return None, validation_error
+        return PendingToolCall(id=call_id, name="netbox_write", arguments=arguments), None
+
+    def _raw_parent_calls(
+        self,
+        base_id: str,
+        fallback: dict[str, Any],
+        object_type: str,
+    ) -> tuple[list[PendingToolCall], ToolResult | None, str]:
+        manufacturer_id = f"{base_id}-manufacturer"
+        parent_id = f"{base_id}-type"
+        manufacturer, error = self._pending_write_call(manufacturer_id, {
+            "app": "dcim", "endpoint": "manufacturers", "action": "create",
+            "data": {"name": str(fallback.get("manufacturer") or "Generic")},
+        })
+        if error is not None or manufacturer is None:
+            return [], error, ""
+        parent_endpoint = "device-types" if object_type == "device-type" else "module-types"
+        relation = "device_type" if object_type == "device-type" else "module_type"
+        parent_data: dict[str, Any] = {
+            "model": str(fallback.get("model") or "Generic"),
+            "manufacturer": f"${{{manufacturer_id}.data.id}}",
+        }
+        if object_type == "device-type":
+            parent_data["u_height"] = fallback.get("u_height") or 1
+        parent, error = self._pending_write_call(parent_id, {
+            "app": "dcim", "endpoint": parent_endpoint, "action": "create", "data": parent_data,
+        })
+        if error is not None or parent is None:
+            return [], error, ""
+        calls = [manufacturer, parent]
+        component_templates = fallback.get("component_templates")
+        if isinstance(component_templates, dict):
+            counter = 0
+            for collection, endpoint in NDX_COMPONENT_ENDPOINTS.items():
+                components = component_templates.get(collection) or []
+                if not isinstance(components, list):
+                    continue
+                for component in components:
+                    if not isinstance(component, dict):
+                        continue
+                    counter += 1
+                    component_call, error = self._pending_write_call(f"{base_id}-component-{counter}", {
+                        "app": "dcim", "endpoint": endpoint, "action": "create",
+                        "data": {**component, relation: f"${{{parent_id}.data.id}}"},
+                    })
+                    if error is not None or component_call is None:
+                        return [], error, ""
+                    calls.append(component_call)
+        return calls, None, f"${{{parent_id}.data.id}}"
+
+    def _auto_chain_device(
+        self,
+        call_id: str,
+        arguments: dict[str, Any],
+    ) -> tuple[list[PendingToolCall] | None, ToolResult | None]:
+        data = dict(arguments.get("data") or {})
+        if str(arguments.get("action") or "").lower() != "create" or data.get("device_type") not in (None, ""):
+            return None, None
+        model = str(data.get("model") or data.get("device_type_model") or "Generic").strip() or "Generic"
+        preparer = getattr(self.tools, "prepare_ndx_object", None)
+        if not callable(preparer):
+            return None, None
+        prepared = preparer({
+            "model": model,
+            "manufacturer": data.get("manufacturer") or "Generic",
+            "components": data.get("components") or data.get("component_templates") or {},
+            "u_height": data.get("u_height") or 1,
+        }, "device-type")
+        if not prepared.ok:
+            return [], prepared
+        prepared_data = prepared.data if isinstance(prepared.data, dict) else {}
+        calls: list[PendingToolCall] = []
+        type_reference: Any = None
+        composite = prepared_data.get("composite")
+        if isinstance(composite, dict) and isinstance(composite.get("payload"), dict):
+            type_call_id = f"{call_id}-type"
+            calls.append(PendingToolCall(
+                id=type_call_id,
+                name="import_ndx_object",
+                arguments={"payload": composite["payload"]},
+            ))
+            type_reference = f"${{{type_call_id}.data.id}}"
+        elif isinstance(prepared_data.get("raw_fallback"), dict):
+            raw_calls, error, type_reference = self._raw_parent_calls(
+                call_id, prepared_data["raw_fallback"], "device-type"
+            )
+            if error is not None:
+                return [], error
+            calls.extend(raw_calls)
+        elif prepared_data.get("bypass_ndx"):
+            existing = prepared_data.get("existing")
+            type_reference = existing.get("id") if isinstance(existing, dict) else None
+        if type_reference in (None, ""):
+            return [], ToolResult(ok=False, message="Impossible de résoudre le DeviceType requis.")
+
+        site = data.get("site")
+        site_reference: Any = site
+        if isinstance(site, str) and site.strip() and not site.strip().isdigit():
+            site_id = f"{call_id}-site"
+            site_call, error = self._pending_write_call(site_id, {
+                "app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": site.strip()},
+            })
+            if error is not None or site_call is None:
+                return [], error
+            calls.append(site_call)
+            site_reference = f"${{{site_id}.data.id}}"
+
+        device_data = {
+            key: value for key, value in data.items()
+            if key not in {"model", "device_type_model", "manufacturer", "components", "component_templates", "u_height"}
+        }
+        device_data["device_type"] = type_reference
+        if site_reference not in (None, ""):
+            device_data["site"] = site_reference
+        device, error = self._pending_write_call(call_id, {
+            "app": "dcim", "endpoint": "devices", "action": "create", "data": device_data,
+        })
+        if error is not None or device is None:
+            return [], error
+        calls.append(device)
+        return calls, None
+
     def _loop(
         self,
         messages: list[dict[str, Any]],
@@ -607,15 +737,53 @@ class NetBoxAgent:
                 if call.function.name in self.tools.MUTATING_TOOLS and not confirm_write:
                     ndx_preparer = getattr(self.tools, "prepare_ndx_object", None)
                     endpoint_name = str(arguments.get("endpoint") or "").replace("_", "-").lower()
+                    is_dcim_create = (
+                        call.function.name == "netbox_write"
+                        and str(arguments.get("action") or "").lower() == "create"
+                        and str(arguments.get("app") or "").lower() == "dcim"
+                    )
+                    if is_dcim_create and endpoint_name in {"devices", "device"}:
+                        chained, chain_error = self._auto_chain_device(call.id, arguments)
+                        if chained is not None:
+                            if chain_error is not None:
+                                result = chain_error
+                                collected.append(result)
+                            elif chained:
+                                for pending_call in chained:
+                                    signature = self._call_signature(pending_call)
+                                    if signature not in signatures:
+                                        write_plan.append(pending_call)
+                                        signatures.add(signature)
+                                result = self._planned_result(chained[-1])
+                                collected.append(result)
+                            else:
+                                result = ToolResult(ok=False, message="Auto-chaînage Device impossible.")
+                                collected.append(result)
+                            messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
+                            continue
                     object_type = {"device-types": "device-type", "device-type": "device-type", "module-types": "module-type", "module-type": "module-type"}.get(endpoint_name)
-                    if call.function.name == "netbox_write" and callable(ndx_preparer) and object_type and str(arguments.get("action") or "") == "create" and str(arguments.get("app") or "").lower() == "dcim":
+                    if is_dcim_create and callable(ndx_preparer) and object_type:
                         prepared = ndx_preparer(arguments.get("data") or {}, object_type)
                         if prepared.ok and isinstance(prepared.data, dict) and prepared.data.get("composite"):
                             composite = prepared.data["composite"]
-                            pending_call = PendingToolCall(id="ndx-import", name="import_ndx_object", arguments=composite)
+                            pending_call = PendingToolCall(id=f"{call.id}-ndx-import", name="import_ndx_object", arguments=composite)
                             write_plan.append(pending_call)
                             signatures.add(self._call_signature(pending_call))
                             result = self._planned_result(pending_call)
+                            collected.append(result)
+                            messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
+                            continue
+                        if prepared.ok and isinstance(prepared.data, dict) and isinstance(prepared.data.get("raw_fallback"), dict):
+                            raw_calls, raw_error, _ = self._raw_parent_calls(call.id, prepared.data["raw_fallback"], object_type)
+                            if raw_error is not None:
+                                result = raw_error
+                            else:
+                                for pending_call in raw_calls:
+                                    signature = self._call_signature(pending_call)
+                                    if signature not in signatures:
+                                        write_plan.append(pending_call)
+                                        signatures.add(signature)
+                                result = self._planned_result(raw_calls[-1])
                             collected.append(result)
                             messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
                             continue
@@ -786,14 +954,16 @@ class NetBoxAgent:
         ordered: list[PendingToolCall] = []
         resolved: set[str] = set()
         while unresolved:
-            ready = [call for call in unresolved if cls._plan_dependencies(call.arguments, pending).issubset(resolved)]
-            if not ready:
+            ready = next(
+                (call for call in unresolved if cls._plan_dependencies(call.arguments, pending).issubset(resolved)),
+                None,
+            )
+            if ready is None:
                 ordered.extend(unresolved)
                 break
-            for call in ready:
-                ordered.append(call)
-                resolved.add(call.id)
-                unresolved.remove(call)
+            ordered.append(ready)
+            resolved.add(ready.id)
+            unresolved.remove(ready)
         return ordered
 
     def confirm(

@@ -35,6 +35,7 @@ class NDXCompositeImporter:
                 "app": "dcim", "endpoint": config["endpoint"], "action": "create", "data": {"model": payload.parent.model},
             })
         )
+        record: dict[str, Any] = {}
         if existing_parent is not None:
             record = existing_parent.data if isinstance(existing_parent.data, dict) else {}
             manufacturer = record.get("manufacturer")
@@ -43,7 +44,11 @@ class NDXCompositeImporter:
             if record_model.casefold() != payload.parent.model.casefold() or manufacturer_name.casefold() != payload.manufacturer.casefold():
                 existing_parent = None
         if existing_parent is not None:
-            return ToolResult(ok=True, message=f"{config['label']} déjà présent ; import NDX ignoré.", data={"skipped": True, "object_type": payload.object_type})
+            return ToolResult(
+                ok=True,
+                message=f"{config['label']} déjà présent ; import NDX ignoré.",
+                data={"id": record.get("id"), "skipped": True, "object_type": payload.object_type},
+            )
         if payload.component_count() == 0:
             return ToolResult(ok=False, message="Import NDX refusé : la spec ne contient aucun composant.", data={"reason": "empty_component_templates"})
         if config["requires_interfaces"] and payload.interface_count() == 0:

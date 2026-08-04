@@ -333,12 +333,16 @@ class NetBoxTools:
         wanted_model = self._normalize(model)
         wanted = self._normalize(manufacturer)
         for raw in records:
+            raw_relation = getattr(raw, "manufacturer", None)
             record = self._safe(raw)
             if not isinstance(record, dict) or self._normalize(record.get("model")) != wanted_model:
                 continue
             relation = record.get("manufacturer")
             labels = []
-            if isinstance(relation, dict):
+            if raw_relation is not None and not isinstance(raw_relation, (str, int, float, bool)):
+                labels = [getattr(raw_relation, field, None) for field in ("name", "display", "slug")]
+                labels.append(str(raw_relation))
+            elif isinstance(relation, dict):
                 labels = [relation.get("name"), relation.get("display"), relation.get("slug")]
             if wanted in {self._normalize(value) for value in labels if value}:
                 return ToolResult(ok=True, message="Objet existant réutilisé.", data=record)

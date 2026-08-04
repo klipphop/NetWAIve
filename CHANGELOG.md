@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0-P2] - 2026-08-04
+
+### Fixed
+- Resolve pynetbox Manufacturer relations before serialization so existing DeviceTypes and ModuleTypes are correctly bypassed.
+- Post-validate model and Manufacturer identity before any NDX bypass.
+
+### Tests
+- Added a pynetbox relation serialization regression and validated the live Catalyst 9200-24P bypass.
+
 ## [0.5.0-P1] - 2026-08-03
 
 ### Added

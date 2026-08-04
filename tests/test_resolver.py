@@ -93,6 +93,28 @@ def test_ndx_existing_lookup_is_scoped_by_manufacturer():
     assert tools._existing_ndx_parent("Shared Model", "device-type", "Missing Vendor") is None
 
 
+def test_ndx_lookup_reads_pynetbox_relation_before_serialize():
+    class Manufacturer:
+        name = "Target Vendor"
+        slug = "target-vendor"
+        display = "Target Vendor"
+        def __str__(self): return self.name
+
+    class DeviceTypeRecord:
+        manufacturer = Manufacturer()
+        def serialize(self):
+            return {"id": 2, "model": "Shared Model", "manufacturer": 42}
+
+    class DeviceTypes:
+        def filter(self, **kwargs): return [DeviceTypeRecord()]
+
+    tools = object.__new__(NetBoxTools)
+    tools._resolve_endpoint = lambda app, endpoint: (DeviceTypes(), "dcim", None, endpoint)
+    match = tools._existing_ndx_parent("Shared Model", "device-type", "Target Vendor")
+    assert match is not None
+    assert match.data["model"] == "Shared Model"
+
+
 def test_ndx_import_bypasses_every_write_when_parent_exists():
     calls = []
 

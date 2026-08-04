@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 
+import pytest
 from pydantic import SecretStr
 
 from netwaive.agent import NetBoxAgent
@@ -107,7 +108,49 @@ def test_symbolic_reference_resolves_call_aliases_and_result_ids():
     outputs = {"toolu_abc": {"ok": True, "data": {"id": 12}}}
     assert NetBoxAgent._resolve_reference("toolu_abc.data.id", outputs) == 12
     assert NetBoxAgent._resolve_reference("toolu_abc.id", outputs) == 12
-    assert NetBoxAgent._resolve_reference("call_o1hFJh1F074DRdjM1l4v8ACm.data.id", outputs) == 12
+    with pytest.raises(ValueError, match="inconnue|unknown"):
+        NetBoxAgent._resolve_reference("call_o1hFJh1F074DRdjM1l4v8ACm.data.id", outputs)
+    with pytest.raises(ValueError, match="inconnue|unknown"):
+        NetBoxAgent._resolve_reference("call_unknown.data.id", {**outputs, "other": {"data": {"id": 13}}})
+
+
+def test_typed_reference_resolves_list_index_and_rejects_empty_values():
+    outputs = {"lookup": {"ok": True, "data": {"candidates": [{"slug": "switch"}]}}}
+    assert NetBoxAgent._resolve_references("${lookup.data.candidates[0].slug}", outputs) == "switch"
+    assert NetBoxAgent._resolve_references("${call_1.data.candidates[0].slug}", outputs) == "switch"
+
+    with pytest.raises(ValueError, match="vide|empty|invalide|invalid"):
+        NetBoxAgent._resolve_references("${lookup.data}", {"lookup": {"ok": True, "data": {}}})
+    with pytest.raises(ValueError, match="introuvable|unknown"):
+        NetBoxAgent._resolve_references("${lookup.data.missing}", {"lookup": {"ok": True, "data": {}}})
+
+
+def test_confirm_pipeline_resolves_generated_id_as_integer_and_stops_on_empty_parent():
+    class PipelineTools(FakeTools):
+        def __init__(self, empty=False):
+            self.empty = empty
+            self.received = []
+        def find_existing_create(self, arguments): return None
+        def execute(self, name, arguments):
+            self.received.append(arguments)
+            if len(self.received) == 1:
+                return ToolResult(ok=True, message="parent", data={} if self.empty else {"id": 42})
+            return ToolResult(ok=True, message="child", data=arguments)
+
+    pending = [
+        PendingToolCall(id="parent", name="netbox_write", arguments={"app":"dcim","endpoint":"manufacturers","action":"create","data":{"name":"Acme"}}),
+        PendingToolCall(id="child", name="netbox_write", arguments={"app":"dcim","endpoint":"device-types","action":"create","data":{"model":"X1","manufacturer":"${parent.data.id}"}}),
+    ]
+    tools = PipelineTools()
+    result = NetBoxAgent(settings(), tools=tools, client=FakeClient([])).confirm("confirme", pending)
+    assert result.tool_results[-1].ok
+    assert tools.received[1]["data"]["manufacturer"] == 42
+    assert isinstance(tools.received[1]["data"]["manufacturer"], int)
+
+    empty_tools = PipelineTools(empty=True)
+    failed = NetBoxAgent(settings(), tools=empty_tools, client=FakeClient([])).confirm("confirme", pending)
+    assert not failed.tool_results[-1].ok
+    assert len(empty_tools.received) == 1
 
 
 def test_parent_dependencies_are_ordered_before_device_creation():
@@ -116,6 +159,40 @@ def test_parent_dependencies_are_ordered_before_device_creation():
     device = PendingToolCall(id="device", name="netbox_write", arguments={"app":"dcim","endpoint":"devices","action":"create","data":{"name":"sw-01","device_type":"${type.data.id}"}})
     ordered = NetBoxAgent._order_pending([device, device_type, manufacturer])
     assert [call.id for call in ordered] == ["manufacturer", "type", "device"]
+
+
+def test_plan_rejects_duplicate_step_ids_and_dependency_cycles():
+    duplicate = [
+        PendingToolCall(id="same", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":"A"}}),
+        PendingToolCall(id="same", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":"B"}}),
+    ]
+    _, duplicate_errors = NetBoxAgent._sanitize_plan(duplicate)
+    assert any("dupliqu" in error for error in duplicate_errors)
+
+    cycle = [
+        PendingToolCall(id="a", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":"${b.data.name}"}}),
+        PendingToolCall(id="b", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":"${a.data.name}"}}),
+    ]
+    _, cycle_errors = NetBoxAgent._sanitize_plan(cycle)
+    assert any("Cycle" in error for error in cycle_errors)
+
+    unknown = [PendingToolCall(id="x", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":"${call_missing.data.name}"}})]
+    _, unknown_errors = NetBoxAgent._sanitize_plan(unknown)
+    assert any("inconnue" in error for error in unknown_errors)
+
+    class NoExecute(FakeTools):
+        def __init__(self): self.count = 0
+        def execute(self, name, arguments):
+            self.count += 1
+            return ToolResult(ok=True, message="unexpected")
+    tools = NoExecute()
+    plan = [
+        PendingToolCall(id="safe", name="netbox_write", arguments={"app":"dcim","endpoint":"sites","action":"create","data":{"name":"SAFE"}}),
+        unknown[0],
+    ]
+    refused = NetBoxAgent(settings(), tools=tools, client=FakeClient([])).confirm("confirme", plan)
+    assert tools.count == 0
+    assert refused.tool_results == []
 
 
 def test_structured_yaml_and_ascii_inputs_are_treated_as_creation_plans():

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0-P3] - 2026-08-04
+
+### Fixed
+- Replaced raw step-variable string interpolation with a strict typed Python resolver.
+- Added typed dict/list path navigation, including indexed expressions such as `${call_1.data.candidates[0].slug}`.
+- Stop execution with explicit errors when a referenced step failed, returned an empty value, exposed a missing key, or used an invalid index.
+
+### Changed
+- Exact references preserve native Python types such as NetBox integer IDs; embedded string interpolation accepts scalar values only.
+- Unknown opaque call aliases are never guessed or mapped to an unrelated output.
+- Conflicting duplicate step IDs and dependency cycles are rejected before execution.
+
+### Tests
+- Added multi-step pipeline coverage for generated integer IDs, indexed values, empty parent results, malformed paths, and ambiguous aliases.
+
 ## [0.5.0-P2] - 2026-08-04
 
 ### Fixed

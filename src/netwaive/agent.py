@@ -366,11 +366,40 @@ class NetBoxAgent:
         )
 
     @staticmethod
-    def _resolve_reference(expression: str, outputs: dict[str, dict[str, Any]]) -> Any:
-        parts = expression.split(".")
-        if not parts:
-            raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
-        key = parts[0]
+    def _parse_reference_path(expression: str) -> list[str | int]:
+        match = re.match(r"^[A-Za-z0-9_-]+", expression)
+        if match is None:
+            raise ValueError(f"Référence d’étape invalide : ${{{expression}}}")
+        parts: list[str | int] = [match.group(0)]
+        position = match.end()
+        while position < len(expression):
+            if expression[position] == ".":
+                match = re.match(r"[A-Za-z0-9_-]+", expression[position + 1:])
+                if match is None:
+                    raise ValueError(f"Référence d’étape invalide : ${{{expression}}}")
+                parts.append(match.group(0))
+                position += 1 + match.end()
+                continue
+            if expression[position] == "[":
+                match = re.match(r"\[(\d+)\]", expression[position:])
+                if match is None:
+                    raise ValueError(f"Index de référence invalide : ${{{expression}}}")
+                parts.append(int(match.group(1)))
+                position += match.end()
+                continue
+            raise ValueError(f"Référence d’étape invalide : ${{{expression}}}")
+        return parts
+
+    @staticmethod
+    def _validate_reference_value(expression: str, value: Any) -> Any:
+        if value is None or value == "" or value == {} or value == [] or value == ():
+            raise ValueError(f"Référence d’étape vide ou invalide : ${{{expression}}}")
+        return value
+
+    @classmethod
+    def _resolve_reference(cls, expression: str, outputs: dict[str, dict[str, Any]]) -> Any:
+        parts = cls._parse_reference_path(expression)
+        key = str(parts[0])
         if key not in outputs:
             alias = re.fullmatch(r"call_(\d+)", key)
             if alias:
@@ -378,22 +407,25 @@ class NetBoxAgent:
                 keys = list(outputs)
                 if 0 <= index < len(keys):
                     key = keys[index]
-        if key not in outputs and key.startswith("call_") and outputs:
-            # Some providers regenerate opaque call IDs between planning and execution.
-            # The dependency ordering guarantees the immediately preceding successful output is the parent.
-            key = next(reversed(outputs))
         if key not in outputs:
-            raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
+            raise ValueError(f"Référence d’étape inconnue : ${{{expression}}}")
         current: Any = outputs[key]
+        if isinstance(current, dict) and current.get("ok") is False:
+            raise ValueError(f"L’étape référencée a échoué : ${{{expression}}}")
         for part in parts[1:]:
+            if isinstance(part, int):
+                if not isinstance(current, (list, tuple)) or part >= len(current):
+                    raise ValueError(f"Index de référence introuvable : ${{{expression}}}")
+                current = current[part]
+                continue
             if isinstance(current, dict) and part in current:
                 current = current[part]
                 continue
             if part == "id" and isinstance(current, dict) and isinstance(current.get("data"), dict) and "id" in current["data"]:
                 current = current["data"]["id"]
                 continue
-            raise ValueError(f"Référence symbolique non résolue : ${{{expression}}}")
-        return current
+            raise ValueError(f"Chemin de référence introuvable : ${{{expression}}}")
+        return cls._validate_reference_value(expression, current)
 
     @classmethod
     def _resolve_references(cls, value: Any, outputs: dict[str, dict[str, Any]]) -> Any:
@@ -406,7 +438,17 @@ class NetBoxAgent:
         exact = REFERENCE_RE.fullmatch(value)
         if exact:
             return cls._resolve_reference(exact.group(1), outputs)
-        return REFERENCE_RE.sub(lambda match: str(cls._resolve_reference(match.group(1), outputs)), value)
+
+        def replace(match: re.Match[str]) -> str:
+            resolved = cls._resolve_reference(match.group(1), outputs)
+            if not isinstance(resolved, (str, int, float, bool)):
+                raise ValueError(f"Interpolation non scalaire interdite : ${{{match.group(1)}}}")
+            return str(resolved)
+
+        rendered = REFERENCE_RE.sub(replace, value)
+        if "${" in rendered:
+            raise ValueError(f"Référence d’étape non résolue : {rendered}")
+        return rendered
 
     @classmethod
     def _resolve_available_references(cls, value: Any, outputs: dict[str, dict[str, Any]]) -> Any:
@@ -416,14 +458,30 @@ class NetBoxAgent:
             return [cls._resolve_available_references(item, outputs) for item in value]
         if not isinstance(value, str) or "${" not in value:
             return value
+
+        def available(expression: str) -> bool:
+            try:
+                root = str(cls._parse_reference_path(expression)[0])
+            except ValueError:
+                return False
+            if root in outputs:
+                return True
+            alias = re.fullmatch(r"call_(\d+)", root)
+            return bool(alias and 0 < int(alias.group(1)) <= len(outputs))
+
         exact = REFERENCE_RE.fullmatch(value)
-        if exact and exact.group(1).split(".")[0] in outputs:
+        if exact and available(exact.group(1)):
             return cls._resolve_reference(exact.group(1), outputs)
-        return REFERENCE_RE.sub(
-            lambda match: str(cls._resolve_reference(match.group(1), outputs))
-            if match.group(1).split(".")[0] in outputs else match.group(0),
-            value,
-        )
+
+        def replace(match: re.Match[str]) -> str:
+            if not available(match.group(1)):
+                return match.group(0)
+            resolved = cls._resolve_reference(match.group(1), outputs)
+            if not isinstance(resolved, (str, int, float, bool)):
+                raise ValueError(f"Interpolation non scalaire interdite : ${{{match.group(1)}}}")
+            return str(resolved)
+
+        return REFERENCE_RE.sub(replace, value)
 
     def _loop(
         self,
@@ -655,8 +713,28 @@ class NetBoxAgent:
         return set()
 
     @classmethod
+    def _plan_dependencies(cls, value: Any, pending: list[PendingToolCall]) -> set[str]:
+        by_id = {call.id for call in pending}
+        mapped: set[str] = set()
+        for dependency in cls._reference_dependencies(value):
+            if dependency in by_id:
+                mapped.add(dependency)
+                continue
+            alias = re.fullmatch(r"call_(\d+)", dependency)
+            if alias and 0 < int(alias.group(1)) <= len(pending):
+                mapped.add(pending[int(alias.group(1)) - 1].id)
+        return mapped
+
+    @classmethod
     def _sanitize_plan(cls, pending: list[PendingToolCall]) -> tuple[list[PendingToolCall], list[str]]:
         """Deduplicate exact calls and reject unresolved/unknown symbolic references before confirmation."""
+        errors: list[str] = []
+        signatures_by_id: dict[str, set[str]] = {}
+        for call in pending:
+            signatures_by_id.setdefault(call.id, set()).add(cls._call_signature(call))
+        duplicate_ids = sorted(call_id for call_id, signatures in signatures_by_id.items() if len(signatures) > 1)
+        if duplicate_ids:
+            errors.append("Identifiants d’étape dupliqués : " + ", ".join(duplicate_ids) + ".")
         unique: list[PendingToolCall] = []
         seen: set[str] = set()
         for call in pending:
@@ -665,16 +743,24 @@ class NetBoxAgent:
                 seen.add(signature)
                 unique.append(call)
         call_ids = {call.id for call in unique}
-        errors: list[str] = []
         for call in unique:
             rendered = json.dumps(call.arguments, ensure_ascii=False)
             if "${" in rendered:
                 refs = cls._reference_dependencies(call.arguments)
                 unknown = refs - call_ids
-                # Opaque call_* IDs may be emitted by providers before their final call IDs are materialized.
-                # Let the universal runtime resolver handle them; reject only malformed/non-tool variables here.
-                if not refs or any(not ref.startswith("call_") for ref in unknown):
+                valid_ordinals = {f"call_{index}" for index in range(1, len(unique) + 1)}
+                if not refs or bool(unknown - valid_ordinals):
                     errors.append(f"La référence de l’étape « {call.id} » est invalide ou inconnue.")
+        dependencies = {call.id: cls._plan_dependencies(call.arguments, unique) for call in unique}
+        remaining = set(call_ids)
+        resolved: set[str] = set()
+        while remaining:
+            ready = {call_id for call_id in remaining if dependencies[call_id].issubset(resolved)}
+            if not ready:
+                errors.append("Cycle de dépendances détecté entre les étapes : " + ", ".join(sorted(remaining)) + ".")
+                break
+            resolved.update(ready)
+            remaining.difference_update(ready)
         return cls._order_pending(unique), errors
 
     @classmethod
@@ -685,7 +771,7 @@ class NetBoxAgent:
         ordered: list[PendingToolCall] = []
         resolved: set[str] = set()
         while unresolved:
-            ready = [call for call in unresolved if cls._reference_dependencies(call.arguments).intersection(by_id).issubset(resolved)]
+            ready = [call for call in unresolved if cls._plan_dependencies(call.arguments, pending).issubset(resolved)]
             if not ready:
                 ordered.extend(unresolved)
                 break

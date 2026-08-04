@@ -15,6 +15,38 @@ class RoleEndpoint:
         ]
 
 
+def test_optional_writable_slug_is_generated_before_business_clarification():
+    schema = ToolResult(ok=True, message="schema", data={
+        "required_fields": ["site"],
+        "writable_fields": {"name": {}, "slug": {}, "site": {}},
+    })
+    tools = object.__new__(NetBoxTools)
+    tools.get_endpoint_schema = lambda args: schema
+
+    enriched = tools.enrich_write_arguments({
+        "app": "dcim", "endpoint": "sites", "action": "create",
+        "data": {"name": "Café Réseau"},
+    })
+    assert enriched["data"]["slug"] == "cafe-reseau"
+
+    missing = tools.validate_write_payload(enriched)
+    assert missing is not None
+    assert missing.data["missing_fields"] == [{"field": "site", "choices": []}]
+    assert "slug" not in missing.message
+
+    source_schema = ToolResult(ok=True, message="schema", data={
+        "required_fields": ["name", "slug"],
+        "writable_fields": {"name": {}, "slug": {}},
+    })
+    tools.get_endpoint_schema = lambda args: source_schema
+    source_missing = tools.validate_write_payload({
+        "app": "dcim", "endpoint": "sites", "action": "create", "data": {},
+    })
+    assert source_missing is not None
+    assert source_missing.data["missing_fields"] == [{"field": "name", "choices": []}]
+    assert "slug" not in source_missing.message
+
+
 def test_device_create_autofills_live_switch_role_and_required_slug():
     tools = object.__new__(NetBoxTools)
     tools.resolver_observed_ids = set()
@@ -35,7 +67,6 @@ def test_device_create_autofills_live_switch_role_and_required_slug():
     assert enriched["data"]["role"] == 12
     assert enriched["data"]["slug"] == "core-switch-01"
     assert tools.resolver_observed_ids == {12}
-
 
 def test_device_role_id_requires_live_observation_or_resolver():
     arguments = {"app": "dcim", "endpoint": "devices", "action": "create", "data": {"name": "SW-X", "role": 987654}}
@@ -210,3 +241,4 @@ def test_generic_create_dedup_lookup_fails_closed():
             "app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "LAB"}
         })
     assert "SECRET_BACKEND_DETAIL" not in str(caught.value)
+

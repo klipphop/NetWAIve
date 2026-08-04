@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-P3] - 2026-08-04
+
+### Fixed
+- Generate every supported missing NetBox slug in Python from `name`, `model`, or `display` before OpenAPI required-field validation.
+- Keep technical slug generation separate from unresolved mandatory business values.
+- Suppress `slug` from clarification payloads; when its derivation source is absent, request the writable business source (`name`, `model`, or `display`) instead.
+
+### Changed
+- The chat prompt never asks users for slugs and explicitly asks one clear question when a required business value has no valid default.
+- Zero-Ask completion remains limited to deterministic/defaultable dependencies and no longer authorizes invented site names, relations, or addresses.
+
+### Tests
+- Added coverage proving an optional writable slug is generated before validation and only the missing business field is reported.
+- Added chat coverage proving a missing required business value yields one clarification question and no Pending plan.
+
 ## [0.5.1-P2] - 2026-08-04
 
 ### Fixed

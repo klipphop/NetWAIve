@@ -376,8 +376,11 @@ class NetBoxTools:
         except Exception:
             schema = {}
         required = set(schema.get("required_fields") or [])
-        if "slug" in required and not data.get("slug"):
-            source = data.get("name") or data.get("model")
+        raw_writable = schema.get("writable_fields")
+        writable: dict[str, Any] = dict(raw_writable) if isinstance(raw_writable, dict) else {}
+        supports_slug = "slug" in required or "slug" in writable
+        if supports_slug and not data.get("slug"):
+            source = data.get("name") or data.get("model") or data.get("display")
             if source:
                 data["slug"] = netbox_slug(source)
         if self._normalize(args.app) == "dcim" and self._normalize(args.endpoint) in {"device", "devices"} and not (data.get("role") or data.get("device_role")):
@@ -431,6 +434,11 @@ class NetBoxTools:
         schema = schema_result.data if isinstance(schema_result.data, dict) else {}
         data = dict(args.data)
         missing = [field for field in schema.get("required_fields", []) if field not in data and args.action == "create"]
+        if "slug" in missing:
+            missing.remove("slug")
+            source_field = next((field for field in ("name", "model", "display") if field in schema.get("writable_fields", {})), None)
+            if source_field and not data.get(source_field) and source_field not in missing:
+                missing.append(source_field)
         if missing:
             details = []
             writable = schema.get("writable_fields", {})

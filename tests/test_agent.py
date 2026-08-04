@@ -364,6 +364,8 @@ def test_system_prompt_is_intent_only_and_delegates_backend_fallbacks():
     assert "zero-ask completion" in prompt
     assert "generic" in prompt
     assert "plan netbox brut" in prompt
+    assert "ne demande jamais un slug" in prompt
+    assert "champ métier obligatoire" in prompt
     for forbidden in (
         "avant chaque mutation",
         "vérifier l'existence",
@@ -371,10 +373,32 @@ def test_system_prompt_is_intent_only_and_delegates_backend_fallbacks():
         "absence de doublon",
         "device role",
         "device-role",
-        "slug",
         "déduis le rôle",
     ):
         assert forbidden not in prompt
+
+
+def test_missing_required_business_value_asks_one_question_without_pending():
+    class MissingBusinessTools(FakeTools):
+        def enrich_write_arguments(self, arguments):
+            return arguments
+        def validate_write_payload(self, arguments):
+            return ToolResult(
+                ok=False,
+                message="Valeurs requises manquantes",
+                data={"missing_fields": [{"field": "name", "choices": []}]},
+            )
+
+    write = tool_call("netbox_write", {
+        "app": "dcim", "endpoint": "sites", "action": "create", "data": {},
+    }, "create-site")
+    result = NetBoxAgent(
+        settings(), tools=MissingBusinessTools(),
+        client=FakeClient([Message(tool_calls=[write]), Message("Quel nom de site souhaitez-vous utiliser ?")]),
+    ).run("Crée un site")
+    assert result.pending_confirmation == []
+    assert result.message == "Quel nom de site souhaitez-vous utiliser ?"
+    assert result.message.count("?") == 1
 
 
 def test_clear_create_intent_produces_direct_pending_without_read_or_question():
@@ -842,3 +866,4 @@ def test_read_tool_result_is_returned_to_llm():
     result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Cherche SW-01")
     assert result.message == "SW-01 existe."
     assert result.tool_results[0].ok is True
+

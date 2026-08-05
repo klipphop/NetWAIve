@@ -426,6 +426,9 @@ def test_system_prompt_is_intent_only_and_delegates_backend_fallbacks():
     assert "ne demande jamais un slug" in prompt
     assert "champ métier obligatoire" in prompt
     assert "quantité explicite de composants" in prompt
+    assert "fabricant par défaut" in prompt
+    assert "exactement `generic`" in prompt
+    assert "unknown" in prompt and "inconnu" in prompt
     for forbidden in (
         "avant chaque mutation",
         "vérifier l'existence",
@@ -541,24 +544,32 @@ def test_raw_component_quantity_expands_to_distinct_pending_steps():
             agent._expand_component_spec({"name": "Invalid", "quantity": invalid_quantity})
 
 
+def test_module_type_missing_manufacturer_uses_generic():
+    agent = NetBoxAgent(settings(), tools=FakeTools(), client=FakeClient([]))
+    calls, error, _ = agent._raw_parent_calls("module-device", {"model": "MOD-1", "component_templates": {}}, "module-type")
+    assert error is None
+    manufacturer = next(call for call in calls if call.arguments["endpoint"] == "manufacturers")
+    assert manufacturer.arguments["data"]["name"] == "Generic"
+
+
 def test_plan_time_lookup_reuses_existing_manufacturer_and_site():
     class ExistingTools(FakeTools):
         def prepare_ndx_object(self, data, object_type):
             return ToolResult(ok=True, message="fallback", data={"raw_fallback": {
-                "model": data.get("model"), "manufacturer": data.get("manufacturer") or "Unknown",
+                "model": data.get("model"), "manufacturer": data.get("manufacturer") or "Generic",
                 "component_templates": {},
             }})
         def find_existing_create(self, arguments):
             endpoint = arguments.get("endpoint")
             if endpoint == "manufacturers":
-                return ToolResult(ok=True, message="existing", data={"id": 10, "name": "Unknown"})
+                return ToolResult(ok=True, message="existing", data={"id": 10, "name": "Generic"})
             if endpoint == "sites":
                 return ToolResult(ok=True, message="existing", data={"id": 20, "name": "LAB"})
             return None
 
     write = tool_call("netbox_write", {
         "app": "dcim", "endpoint": "devices", "action": "create", "data": {
-            "name": "SW-LOOKUP", "model": "CUSTOM", "manufacturer": "Unknown", "site": "LAB",
+            "name": "SW-LOOKUP", "model": "CUSTOM", "manufacturer": "Generic", "site": "LAB",
         },
     }, "lookup-device")
     result = NetBoxAgent(
@@ -1020,5 +1031,6 @@ def test_read_tool_result_is_returned_to_llm():
     result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Cherche SW-01")
     assert result.message == "SW-01 existe."
     assert result.tool_results[0].ok is True
+
 
 

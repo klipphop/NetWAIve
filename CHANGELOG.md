@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-P5] - 2026-08-05
+
+### Changed
+- Standardize the missing DeviceType/ModuleType manufacturer name to exactly `Generic`; `Unknown` and `Inconnu` are no longer valid defaults.
+- Keep plan-time generic create lookups active so an existing `Generic` manufacturer is reused by ID instead of recreated.
+- Document the same naming rule in the NetWAIve development skill and the system prompt.
+
+### Tests
+- Updated regression fixtures from `Unknown` to `Generic`.
+- Added ModuleType coverage for the missing-manufacturer default and prompt contract assertions.
+
 ## [0.5.1-P4] - 2026-08-05
 
 ### Fixed

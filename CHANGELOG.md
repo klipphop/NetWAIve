@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-08-05
+
+### Changed
+- Adopt strict SemVer patch releases; the current runtime, package metadata, UI version, and release tag are now `0.5.2`.
+- Future fixes increment the patch component directly (`0.5.3`, `0.5.4`, etc.).
+
 ## [0.5.1-P8] - 2026-08-05
 
 ### Fixed

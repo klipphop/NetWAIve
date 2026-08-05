@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-P4] - 2026-08-05
+
+### Fixed
+- Canonicalize LLM-corrupted symbolic references by preferring exact step IDs, then repairing known step or ordinal aliases with arbitrary hyphen suffixes and mapping them to `data.id`.
+- Repair suffixed ID paths such as `${call_ABC123.data.id-device}` while preserving native integer IDs and rejecting genuinely unknown references.
+- Expand `quantity`, `count`, or `qty` component specifications into 1–512 distinct, numbered component-template creates before Pending confirmation.
+- Perform fail-closed exact NetBox lookups for resolvable generic creates before Pending; existing manufacturers, sites, and other objects are removed from the plan and their integer IDs are injected into dependents.
+
+### Changed
+- The intent prompt requires explicit component quantities to appear as N distinct Pending operations.
+- Fully reused plans return a no-change result instead of an empty confirmation card.
+
+### Tests
+- Added regression coverage for corrupted root/path suffixes, exact-ID precedence, ordinal aliases, eight-port expansion, existing Manufacturer/Site reuse, ID rewriting, and lookup failure isolation.
+- Verified existing Manufacturer/Site reuse against the live NetBox API without mutation.
+
 ## [0.5.1-P3] - 2026-08-04
 
 ### Fixed

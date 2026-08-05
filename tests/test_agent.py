@@ -103,6 +103,65 @@ def test_plan_sanitization_deduplicates_and_rejects_unknown_variables():
     assert errors
 
 
+def test_corrupted_reference_suffixes_are_canonicalized_to_parent_id():
+    parent = PendingToolCall(id="call_ABC123", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "manufacturers", "action": "create", "data": {"name": "Acme"},
+    })
+    child_short = PendingToolCall(id="child-short", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "device-types", "action": "create",
+        "data": {"model": "X1", "manufacturer": "${call_ABC123-type}"},
+    })
+    child_path = PendingToolCall(id="child-path", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "device-types", "action": "create",
+        "data": {"model": "X2", "manufacturer": "${call_ABC123.data.id-device}"},
+    })
+    clean, errors = NetBoxAgent._sanitize_plan([child_path, parent, child_short])
+    assert errors == []
+    by_id = {call.id: call for call in clean}
+    expected = "${call_ABC123.data.id}"
+    assert by_id["child-short"].arguments["data"]["manufacturer"] == expected
+    assert by_id["child-path"].arguments["data"]["manufacturer"] == expected
+    outputs = {"call_ABC123": {"ok": True, "data": {"id": 77}}}
+    assert NetBoxAgent._resolve_references("${call_ABC123-type}", outputs) == 77
+    assert NetBoxAgent._resolve_references("${call_ABC123.data.id-device}", outputs) == 77
+    assert NetBoxAgent._resolve_references("${call_1-type}", outputs) == 77
+
+    exact_outputs = {
+        "call_ABC123": {"ok": True, "data": {"id": 77}},
+        "call_ABC123-type": {"ok": True, "data": {"id": 88}},
+    }
+    assert NetBoxAgent._resolve_references("${call_ABC123-type.data.id}", exact_outputs) == 88
+
+    ordinal_child = PendingToolCall(id="ordinal-child", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "device-types", "action": "create",
+        "data": {"model": "O1", "manufacturer": "${call_2.data.id}"},
+    })
+    ordinal_parent = PendingToolCall(id="ordinal-parent", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "manufacturers", "action": "create", "data": {"name": "Ordinal"},
+    })
+    ordinal_plan, ordinal_errors = NetBoxAgent._sanitize_plan([ordinal_child, ordinal_parent])
+    assert ordinal_errors == []
+    assert [call.id for call in ordinal_plan] == ["ordinal-parent", "ordinal-child"]
+    assert ordinal_plan[1].arguments["data"]["manufacturer"] == "${ordinal-parent.data.id}"
+
+    class OrdinalTools(FakeTools):
+        def __init__(self):
+            self.received = []
+        def execute(self, name, arguments):
+            self.received.append(arguments)
+            if arguments.get("endpoint") == "manufacturers":
+                return ToolResult(ok=True, message="parent", data={"id": 91})
+            return ToolResult(ok=True, message="child", data=arguments)
+
+    ordinal_tools = OrdinalTools()
+    confirmed = NetBoxAgent(settings(), tools=ordinal_tools, client=FakeClient([])).confirm(
+        "confirme", [ordinal_child, ordinal_parent]
+    )
+    assert all(result.ok for result in confirmed.tool_results)
+    assert ordinal_tools.received[1]["data"]["manufacturer"] == 91
+    assert isinstance(ordinal_tools.received[1]["data"]["manufacturer"], int)
+
+
 def test_netbox_errors_preserve_native_payload():
     message = NetBoxTools._friendly_error("Related object not found: device role 'Switch'")
     assert message == "Related object not found: device role 'Switch'"
@@ -366,6 +425,7 @@ def test_system_prompt_is_intent_only_and_delegates_backend_fallbacks():
     assert "plan netbox brut" in prompt
     assert "ne demande jamais un slug" in prompt
     assert "champ métier obligatoire" in prompt
+    assert "quantité explicite de composants" in prompt
     for forbidden in (
         "avant chaque mutation",
         "vérifier l'existence",
@@ -450,6 +510,100 @@ def test_device_intent_auto_chains_raw_dependencies_without_question():
     assert by_endpoint["devices"].arguments["data"]["device_type"] == "${create-device-type.data.id}"
     assert by_endpoint["devices"].arguments["data"]["site"] == "${create-device-site.data.id}"
     assert "?" in result.message  # confirmation globale uniquement
+
+
+def test_raw_component_quantity_expands_to_distinct_pending_steps():
+    agent = NetBoxAgent(settings(), tools=FakeTools(), client=FakeClient([]))
+    calls, error, _ = agent._raw_parent_calls("power-device", {
+        "model": "PDU-8E",
+        "manufacturer": "Generic",
+        "component_templates": {
+            "power-ports": [{"name": "Power Port", "type": "type-e", "quantity": 8}],
+        },
+    }, "device-type")
+    assert error is None
+    components = [call for call in calls if call.arguments.get("endpoint") == "power-port-templates"]
+    assert len(components) == 8
+    assert [call.arguments["data"]["name"] for call in components] == [f"Power Port {i}" for i in range(1, 9)]
+    assert len({call.id for call in components}) == 8
+    assert all(call.arguments["data"]["device_type"] == "${power-device-type.data.id}" for call in components)
+
+    direct = PendingToolCall(id="direct-power", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "power-port-templates", "action": "create",
+        "data": {"name": "Input", "type": "type-e", "count": 8, "device_type": 99},
+    })
+    direct_calls, direct_errors, _ = agent._prepare_pending_plan([direct])
+    assert direct_errors == []
+    assert len(direct_calls) == 8
+    assert [call.arguments["data"]["name"] for call in direct_calls] == [f"Input {index}" for index in range(1, 9)]
+    for invalid_quantity in (0, 513, 1.5, "eight", True):
+        with pytest.raises(ValueError, match="[Qq]uantité"):
+            agent._expand_component_spec({"name": "Invalid", "quantity": invalid_quantity})
+
+
+def test_plan_time_lookup_reuses_existing_manufacturer_and_site():
+    class ExistingTools(FakeTools):
+        def prepare_ndx_object(self, data, object_type):
+            return ToolResult(ok=True, message="fallback", data={"raw_fallback": {
+                "model": data.get("model"), "manufacturer": data.get("manufacturer") or "Unknown",
+                "component_templates": {},
+            }})
+        def find_existing_create(self, arguments):
+            endpoint = arguments.get("endpoint")
+            if endpoint == "manufacturers":
+                return ToolResult(ok=True, message="existing", data={"id": 10, "name": "Unknown"})
+            if endpoint == "sites":
+                return ToolResult(ok=True, message="existing", data={"id": 20, "name": "LAB"})
+            return None
+
+    write = tool_call("netbox_write", {
+        "app": "dcim", "endpoint": "devices", "action": "create", "data": {
+            "name": "SW-LOOKUP", "model": "CUSTOM", "manufacturer": "Unknown", "site": "LAB",
+        },
+    }, "lookup-device")
+    result = NetBoxAgent(
+        settings(), tools=ExistingTools(),
+        client=FakeClient([Message(tool_calls=[write]), Message("Plan complet."), Message("Plan final.")]),
+    ).run("Crée SW-LOOKUP modèle CUSTOM sur LAB")
+    calls = result.pending_confirmation
+    endpoints = [call.arguments.get("endpoint") for call in calls]
+    assert "manufacturers" not in endpoints
+    assert "sites" not in endpoints
+    device_type = next(call for call in calls if call.arguments.get("endpoint") == "device-types")
+    device = next(call for call in calls if call.arguments.get("endpoint") == "devices")
+    assert device_type.arguments["data"]["manufacturer"] == 10
+    assert device.arguments["data"]["site"] == 20
+    assert isinstance(device_type.arguments["data"]["manufacturer"], int)
+    assert isinstance(device.arguments["data"]["site"], int)
+
+    existing_agent = NetBoxAgent(settings(), tools=ExistingTools(), client=FakeClient([]))
+    existing_site = PendingToolCall(id="existing-site", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "LAB"},
+    })
+    remaining, lookup_errors, reused = existing_agent._prepare_pending_plan([existing_site])
+    assert remaining == [] and lookup_errors == [] and len(reused) == 1
+
+    class BrokenLookupTools(FakeTools):
+        def find_existing_create(self, arguments):
+            raise RuntimeError("SECRET")
+
+    blocked, lookup_errors, _ = NetBoxAgent(
+        settings(), tools=BrokenLookupTools(), client=FakeClient([]),
+    )._prepare_pending_plan([existing_site])
+    assert blocked == []
+    assert lookup_errors == ["Vérification NetBox impossible ; plan bloqué par sécurité."]
+    assert "SECRET" not in lookup_errors[0]
+
+    existing_write = tool_call("netbox_write", {
+        "app": "dcim", "endpoint": "sites", "action": "create", "data": {"name": "LAB"},
+    }, "site-existing")
+    existing_result = NetBoxAgent(
+        settings(), tools=ExistingTools(),
+        client=FakeClient([Message(tool_calls=[existing_write]), Message("Plan complet."), Message("Plan final.")]),
+    ).run("Crée le site LAB")
+    assert existing_result.pending_confirmation == []
+    assert "existe" in existing_result.message
+    assert "Confirmez" not in existing_result.message
 
 
 def test_device_intent_chains_exact_ndx_import_to_device():
@@ -866,4 +1020,5 @@ def test_read_tool_result_is_returned_to_llm():
     result = NetBoxAgent(settings(), tools=FakeTools(), client=client).run("Cherche SW-01")
     assert result.message == "SW-01 existe."
     assert result.tool_results[0].ok is True
+
 

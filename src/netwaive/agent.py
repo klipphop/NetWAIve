@@ -405,6 +405,72 @@ class NetBoxAgent:
             raise ValueError(f"Référence d’étape invalide : ${{{expression}}}")
         return parts
 
+    @classmethod
+    def _canonicalize_reference_expression(
+        cls,
+        expression: str,
+        known_ids: set[str],
+        ordinal_ids: list[str] | None = None,
+    ) -> str:
+        """Repair LLM-added suffixes without weakening unknown-reference validation."""
+        parts = cls._parse_reference_path(expression)
+        root = str(parts[0])
+        repaired_root = False
+        if root not in known_ids:
+            candidates = sorted(
+                (call_id for call_id in known_ids if root.startswith(call_id + "-")),
+                key=len,
+                reverse=True,
+            )
+            if candidates:
+                root = candidates[0]
+                parts[0] = root
+                repaired_root = True
+            else:
+                ordinal_suffix = re.fullmatch(r"(call_\d+)-[A-Za-z0-9_-]+", root)
+                if ordinal_suffix:
+                    root = ordinal_suffix.group(1)
+                    parts[0] = root
+                    repaired_root = True
+        ordinal = re.fullmatch(r"call_(\d+)", root)
+        if root not in known_ids and ordinal and ordinal_ids:
+            position = int(ordinal.group(1)) - 1
+            if 0 <= position < len(ordinal_ids):
+                root = ordinal_ids[position]
+                parts[0] = root
+        if repaired_root and len(parts) == 1:
+            parts.extend(["data", "id"])
+        for index, part in enumerate(parts[1:], start=1):
+            if isinstance(part, str) and part.startswith("id-"):
+                parts[index] = "id"
+        rendered = str(parts[0])
+        for part in parts[1:]:
+            rendered += f"[{part}]" if isinstance(part, int) else f".{part}"
+        return rendered
+
+    @classmethod
+    def _canonicalize_plan_references(
+        cls,
+        value: Any,
+        known_ids: set[str],
+        ordinal_ids: list[str],
+    ) -> Any:
+        if isinstance(value, dict):
+            return {key: cls._canonicalize_plan_references(item, known_ids, ordinal_ids) for key, item in value.items()}
+        if isinstance(value, list):
+            return [cls._canonicalize_plan_references(item, known_ids, ordinal_ids) for item in value]
+        if not isinstance(value, str) or "${" not in value:
+            return value
+
+        def replace(match: re.Match[str]) -> str:
+            try:
+                expression = cls._canonicalize_reference_expression(match.group(1), known_ids, ordinal_ids)
+            except ValueError:
+                return match.group(0)
+            return "${" + expression + "}"
+
+        return REFERENCE_RE.sub(replace, value)
+
     @staticmethod
     def _validate_reference_value(expression: str, value: Any) -> Any:
         if value is None or value == "" or value == {} or value == [] or value == ():
@@ -413,6 +479,7 @@ class NetBoxAgent:
 
     @classmethod
     def _resolve_reference(cls, expression: str, outputs: dict[str, dict[str, Any]]) -> Any:
+        expression = cls._canonicalize_reference_expression(expression, set(outputs))
         parts = cls._parse_reference_path(expression)
         key = str(parts[0])
         if key not in outputs:
@@ -476,6 +543,7 @@ class NetBoxAgent:
 
         def available(expression: str) -> bool:
             try:
+                expression = cls._canonicalize_reference_expression(expression, set(outputs))
                 root = str(cls._parse_reference_path(expression)[0])
             except ValueError:
                 return False
@@ -507,6 +575,35 @@ class NetBoxAgent:
         if validation_error is not None:
             return None, validation_error
         return PendingToolCall(id=call_id, name="netbox_write", arguments=arguments), None
+
+    @staticmethod
+    def _expand_component_spec(component: dict[str, Any]) -> list[dict[str, Any]]:
+        quantity_value = next((component.get(key) for key in ("quantity", "count", "qty") if component.get(key) is not None), 1)
+        if isinstance(quantity_value, bool):
+            raise ValueError("Quantité de composants invalide.")
+        if isinstance(quantity_value, int):
+            quantity = quantity_value
+        elif isinstance(quantity_value, str) and re.fullmatch(r"\d+", quantity_value.strip()):
+            quantity = int(quantity_value.strip())
+        else:
+            raise ValueError("Quantité de composants invalide.")
+        if quantity < 1 or quantity > 512:
+            raise ValueError("La quantité de composants doit être comprise entre 1 et 512.")
+        template = {key: value for key, value in component.items() if key not in {"quantity", "count", "qty"}}
+        if quantity == 1:
+            return [template]
+        base_name = str(template.get("name") or "Component").strip()
+        expanded: list[dict[str, Any]] = []
+        for index in range(1, quantity + 1):
+            item = dict(template)
+            if "{n}" in base_name or "{index}" in base_name:
+                item["name"] = base_name.replace("{n}", str(index)).replace("{index}", str(index))
+            elif re.search(r"\d+$", base_name):
+                item["name"] = re.sub(r"\d+$", str(index), base_name)
+            else:
+                item["name"] = f"{base_name} {index}"
+            expanded.append(item)
+        return expanded
 
     def _raw_parent_calls(
         self,
@@ -540,20 +637,24 @@ class NetBoxAgent:
         if isinstance(component_templates, dict):
             counter = 0
             for collection, endpoint in NDX_COMPONENT_ENDPOINTS.items():
-                components = component_templates.get(collection) or []
-                if not isinstance(components, list):
-                    continue
-                for component in components:
-                    if not isinstance(component, dict):
+                raw_components = component_templates.get(collection) or []
+                component_values = raw_components if isinstance(raw_components, list) else [raw_components]
+                for raw_component in component_values:
+                    if not isinstance(raw_component, dict):
                         continue
-                    counter += 1
-                    component_call, error = self._pending_write_call(f"{base_id}-component-{counter}", {
-                        "app": "dcim", "endpoint": endpoint, "action": "create",
-                        "data": {**component, relation: f"${{{parent_id}.data.id}}"},
-                    })
-                    if error is not None or component_call is None:
-                        return [], error, ""
-                    calls.append(component_call)
+                    try:
+                        expanded_components = self._expand_component_spec(raw_component)
+                    except ValueError as exc:
+                        return [], ToolResult(ok=False, message=str(exc)), ""
+                    for component in expanded_components:
+                        counter += 1
+                        component_call, error = self._pending_write_call(f"{base_id}-component-{counter}", {
+                            "app": "dcim", "endpoint": endpoint, "action": "create",
+                            "data": {**component, relation: f"${{{parent_id}.data.id}}"},
+                        })
+                        if error is not None or component_call is None:
+                            return [], error, ""
+                        calls.append(component_call)
         return calls, None, f"${{{parent_id}.data.id}}"
 
     def _auto_chain_device(
@@ -627,6 +728,71 @@ class NetBoxAgent:
             return [], error
         calls.append(device)
         return calls, None
+
+    def _prepare_pending_plan(
+        self,
+        pending: list[PendingToolCall],
+    ) -> tuple[list[PendingToolCall], list[str], list[ToolResult]]:
+        """Reuse exact live objects before showing Pending and rewrite their dependent IDs."""
+        expanded_pending: list[PendingToolCall] = []
+        component_endpoints = set(NDX_COMPONENT_ENDPOINTS.values())
+        for call in pending:
+            raw_data = call.arguments.get("data")
+            data: dict[str, Any] = dict(raw_data) if isinstance(raw_data, dict) else {}
+            endpoint = str(call.arguments.get("endpoint") or "").replace("_", "-").lower()
+            has_quantity = any(key in data for key in ("quantity", "count", "qty"))
+            if call.name != "netbox_write" or endpoint not in component_endpoints or not has_quantity:
+                expanded_pending.append(call)
+                continue
+            try:
+                components = self._expand_component_spec(data)
+            except ValueError as exc:
+                return [], [str(exc)], []
+            for index, component in enumerate(components, start=1):
+                arguments = {**call.arguments, "data": component}
+                expanded_pending.append(call.model_copy(update={
+                    "id": call.id if index == 1 else f"{call.id}-{index}",
+                    "arguments": arguments,
+                }))
+        ordered, errors = self._sanitize_plan(expanded_pending)
+        if errors:
+            return ordered, errors, []
+        finder = getattr(self.tools, "find_existing_create", None)
+        if not callable(finder):
+            return ordered, [], []
+        outputs: dict[str, dict[str, Any]] = {}
+        kept: list[PendingToolCall] = []
+        reused: list[ToolResult] = []
+        for call in ordered:
+            arguments = self._resolve_available_references(call.arguments, outputs)
+            candidate = call.model_copy(update={"arguments": arguments})
+            is_create = (
+                call.name == "netbox_write"
+                and str(arguments.get("action") or "").lower() == "create"
+                and "${" not in json.dumps(arguments, ensure_ascii=False)
+            )
+            if not is_create:
+                kept.append(candidate)
+                continue
+            try:
+                existing = finder(arguments)
+            except Exception:
+                return [], ["Vérification NetBox impossible ; plan bloqué par sécurité."], reused
+            if existing is None:
+                kept.append(candidate)
+                continue
+            record = existing.data if isinstance(existing.data, dict) else {}
+            record_id = record.get("id")
+            if not isinstance(record_id, int) or isinstance(record_id, bool) or record_id <= 0:
+                return [], ["Objet existant sans identifiant NetBox valide ; plan bloqué."], reused
+            outputs[call.id] = existing.model_dump()
+            reused.append(existing)
+        rewritten = [
+            call.model_copy(update={"arguments": self._resolve_available_references(call.arguments, outputs)})
+            for call in kept
+        ]
+        final, final_errors = self._sanitize_plan(rewritten)
+        return final, final_errors, reused
 
     def _loop(
         self,
@@ -718,9 +884,13 @@ class NetBoxAgent:
                         })
                         plan_completion_repair_used = True
                         continue
-                    write_plan, sanitation_errors = self._sanitize_plan(write_plan)
+                    write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan)
+                    collected.extend(reused_results)
                     if sanitation_errors:
                         return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
+                    if not write_plan and reused_results:
+                        message = "Les objets demandés existent déjà ; aucune création n’est nécessaire." if language == "fr" else "The requested objects already exist; no creation is required."
+                        return AgentResponse(message=message, tool_results=collected)
                     return AgentResponse(
                         message=self._pending_message(write_plan, tool_outputs, language),
                         pending_confirmation=write_plan,
@@ -834,9 +1004,13 @@ class NetBoxAgent:
                         if signature not in signatures:
                             write_plan.append(pending_call)
                             signatures.add(signature)
-                        write_plan, sanitation_errors = self._sanitize_plan(write_plan)
+                        write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan)
+                        collected.extend(reused_results)
                         if sanitation_errors:
                             return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
+                        if not write_plan and reused_results:
+                            message = "Les objets demandés existent déjà ; aucune création n’est nécessaire." if language == "fr" else "The requested objects already exist; no creation is required."
+                            return AgentResponse(message=message, tool_results=collected)
                         return AgentResponse(
                             message=self._pending_message(write_plan, tool_outputs, language),
                             pending_confirmation=write_plan,
@@ -857,9 +1031,13 @@ class NetBoxAgent:
                 })
 
         if write_plan:
-            write_plan, sanitation_errors = self._sanitize_plan(write_plan)
+            write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan)
+            collected.extend(reused_results)
             if sanitation_errors:
                 return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
+            if not write_plan and reused_results:
+                message = "Les objets demandés existent déjà ; aucune création n’est nécessaire." if language == "fr" else "The requested objects already exist; no creation is required."
+                return AgentResponse(message=message, tool_results=collected)
             return AgentResponse(
                 message=self._pending_message(write_plan, tool_outputs, language),
                 pending_confirmation=write_plan,
@@ -912,6 +1090,12 @@ class NetBoxAgent:
     def _sanitize_plan(cls, pending: list[PendingToolCall]) -> tuple[list[PendingToolCall], list[str]]:
         """Deduplicate exact calls and reject unresolved/unknown symbolic references before confirmation."""
         errors: list[str] = []
+        known_ids = {call.id for call in pending}
+        ordinal_ids = [call.id for call in pending]
+        pending = [
+            call.model_copy(update={"arguments": cls._canonicalize_plan_references(call.arguments, known_ids, ordinal_ids)})
+            for call in pending
+        ]
         signatures_by_id: dict[str, set[str]] = {}
         for call in pending:
             signatures_by_id.setdefault(call.id, set()).add(cls._call_signature(call))

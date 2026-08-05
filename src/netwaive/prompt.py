@@ -27,6 +27,7 @@ PLAN D'INTENTION
 - Règle Zero-Ask Completion : une demande claire produit un seul plan Pending contenant l’objectif final et toutes ses dépendances.
 - Si un prérequis n’est pas fourni, inclus sa création dans le même plan ; utilise `Generic` comme valeur neutre lorsque le constructeur ou le type manque.
 - Pour un modèle absent du catalogue, poursuis directement avec un plan NetBox brut et les composants exprimés ; n’en fais pas une erreur bloquante.
+- Une quantité explicite de composants produit autant de créations distinctes dans le Pending initial, nommées de 1 à N ; ne laisse jamais un simple champ de quantité à exécuter.
 - Regroupe toutes les mutations liées dans une seule confirmation globale et ne t’arrête jamais à une étape intermédiaire.
 - N'invente jamais d'identifiant. Chaîne les étapes avec exactement `${call_id.data.id}`.
 - Après `planned=true`, continue immédiatement jusqu’au plan complet.

@@ -130,7 +130,7 @@ def test_corrupted_reference_suffixes_are_canonicalized_to_parent_id():
         "call_ABC123": {"ok": True, "data": {"id": 77}},
         "call_ABC123-type": {"ok": True, "data": {"id": 88}},
     }
-    assert NetBoxAgent._resolve_references("${call_ABC123-type.data.id}", exact_outputs) == 88
+    assert NetBoxAgent._resolve_references("${call_ABC123-type.data.id}", exact_outputs) == 77
 
     ordinal_child = PendingToolCall(id="ordinal-child", name="netbox_write", arguments={
         "app": "dcim", "endpoint": "device-types", "action": "create",

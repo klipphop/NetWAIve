@@ -416,22 +416,22 @@ class NetBoxAgent:
         parts = cls._parse_reference_path(expression)
         root = str(parts[0])
         repaired_root = False
-        if root not in known_ids:
-            candidates = sorted(
-                (call_id for call_id in known_ids if root.startswith(call_id + "-")),
-                key=len,
-                reverse=True,
-            )
-            if candidates:
-                root = candidates[0]
+        provider_root = root.startswith("call_")
+        candidates = sorted(
+            (call_id for call_id in known_ids if root.startswith(call_id + "-")),
+            key=len,
+            reverse=True,
+        )
+        if candidates and provider_root:
+            root = candidates[0]
+            parts[0] = root
+            repaired_root = True
+        elif root not in known_ids:
+            ordinal_suffix = re.fullmatch(r"(call_\d+)-[A-Za-z0-9_-]+", root)
+            if ordinal_suffix:
+                root = ordinal_suffix.group(1)
                 parts[0] = root
                 repaired_root = True
-            else:
-                ordinal_suffix = re.fullmatch(r"(call_\d+)-[A-Za-z0-9_-]+", root)
-                if ordinal_suffix:
-                    root = ordinal_suffix.group(1)
-                    parts[0] = root
-                    repaired_root = True
         ordinal = re.fullmatch(r"call_(\d+)", root)
         if root not in known_ids and ordinal and ordinal_ids:
             position = int(ordinal.group(1)) - 1

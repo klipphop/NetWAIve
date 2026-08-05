@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.1-P6] - 2026-08-05
+## [0.5.1-P7] - 2026-08-05
+
+### Fixed
+- Force removal of `-type`, `-device`, and `-manufacturer` suffixes from `call_...` roots when the unsuffixed provider step exists, even if a suffixed internal step ID also exists.
+- Preserve exact internal non-`call_` step IDs and continue rejecting unknown references/cycles.
+
+### Tests
+- Added regression for simultaneous `call_BASE` / `call_BASE-type` outputs; the suffixed reference resolves to the base step ID and native result ID.
 
 ### Fixed
 - Normalize numeric, `Unknown`, and `Inconnu` manufacturer inputs to the canonical `Generic` name before raw DeviceType/ModuleType creation and plan-time lookup.

@@ -1,16 +1,22 @@
 import argparse
 
-from .agent import NetBoxAgent
 from .config import Settings
+from .v06.application import V06Application
+from .v06.session import SessionScope
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Assistant LLM NetBox via pynetbox")
-    parser.add_argument("message", nargs="+", help="Question ou action à traiter")
-    parser.add_argument("--confirm-write", action="store_true", help="Autoriser les outils RW")
+    parser = argparse.ArgumentParser(description="NetWAIve v0.6 strict read-only resolver and deterministic planner")
+    parser.add_argument("message", nargs="+", help="Intent métier à traiter")
+    parser.add_argument("--confirm-write", action="store_true", help="Exécuter le plan après affichage")
     args = parser.parse_args()
-    response = NetBoxAgent(Settings()).run(" ".join(args.message), confirm_write=args.confirm_write)
-    print(response.message)
+    scope = SessionScope.new("cli")
+    app = V06Application(Settings())
+    plan = app.plan(" ".join(args.message), scope)
+    print(f"Pending v0.6: {len(plan.calls)} operation(s), fingerprint={plan.fingerprint}")
+    if args.confirm_write:
+        report = app.confirm(scope, plan.fingerprint)
+        print("Execution: " + ("success" if report.ok else "failed"))
 
 
 if __name__ == "__main__":

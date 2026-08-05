@@ -14,7 +14,10 @@ from django.utils.translation import get_language
 
 from .agent import NetBoxAgent
 from .config import Settings
-from .models import PendingToolCall
+from .models import PendingToolCall, AgentResponse
+from .v06.application import V06Application
+from .v06.contracts import PendingPlan
+from .v06.session import SessionScope
 
 SESSION_KEY = "netwaive_state"
 MAX_HISTORY = 100
@@ -170,7 +173,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.5.2", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.6.0", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -197,6 +200,35 @@ def history_api(request):
     return JsonResponse(_state_payload(state))
 
 
+def _v06_enabled() -> bool:
+    try:
+        return bool(_plugin_config().get("v06_enabled", False))
+    except Exception:
+        return False
+
+
+def _v06_chat(request, state, active, message, body):
+    app = V06Application(_agent_settings())
+    pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
+    if pending and bool(body.get("approve_pending")):
+        plan = PendingPlan.model_validate({"session_id": active["id"], "generation": pending["generation"], "fingerprint": pending["fingerprint"], "calls": pending["calls"]})
+        scope = SessionScope(active["id"], pending["generation"], plan)
+        report = app.confirm(scope, pending["fingerprint"])
+        answer = "Configuration exécutée." if report.ok else "Exécution v0.6 bloquée."
+        active["pending_write"] = None
+        status = "success" if report.ok else "failed"
+    else:
+        scope = SessionScope.new(active["id"])
+        plan = app.plan(message, scope)
+        active["pending_write"] = {"message": message, "generation": scope.generation, "fingerprint": plan.fingerprint, "calls": [call.model_dump() for call in plan.calls]}
+        answer = f"Plan v0.6 prêt : {len(plan.calls)} opération(s). Confirmation requise."
+        status = "pending"
+    _append_history(active, "user", message)
+    _append_history(active, "assistant", answer)
+    _save_state(request, state)
+    return JsonResponse({**_state_payload(state), "message": answer, "conversation_id": active["id"], "execution_status": status})
+
+
 @login_required
 @require_POST
 def chat_api(request):
@@ -213,6 +245,8 @@ def chat_api(request):
     request_generation = state["generation"]
     active = _active_session(state, str(body.get("conversation_id") or "") or None)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
+    if _v06_enabled():
+        return _v06_chat(request, state, active, message, body)
     language = NetBoxAgent._detect_language(message)
     try:
         agent = NetBoxAgent(_agent_settings())

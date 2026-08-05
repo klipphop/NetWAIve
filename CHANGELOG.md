@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-05
+
+### Added
+- Introduce a strict three-layer pipeline: read-only entity resolution, NDX/custom intent routing, and deterministic planning/execution.
+- Add session-scoped fingerprints and generation guards for pending plans.
+- Add architecture regression tests covering exact resolution, ambiguity, routing, parent-before-components, exact cardinality, stale sessions, and blind execution.
+
+### Changed
+- The v0.6 contracts make certified IDs and route decisions explicit inputs to the planner; the execution engine performs no lookup or string repair.
+
 ## [0.5.2] - 2026-08-05
 
 ### Changed

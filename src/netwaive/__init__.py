@@ -3,8 +3,10 @@ from .agent import NetBoxAgent, AgentResponse
 from .config import Settings
 from .tools import NetBoxTools
 
-__all__ = ["AgentResponse", "NetBoxAgent", "NetBoxTools", "Settings"]
-__version__ = "0.5.2"
+__all__ = ["AgentResponse", "NetBoxAgent", "NetBoxTools", "Settings", "V06Pipeline"]
+__version__ = "0.6.0"
+
+from .v06 import V06Pipeline
 
 try:  # Chargé uniquement dans le venv NetBox.
     from netbox.plugins import PluginConfig

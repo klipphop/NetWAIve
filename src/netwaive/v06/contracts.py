@@ -40,6 +40,12 @@ class ResolutionError(BaseModel):
     candidates: list[ResolvedRef] = Field(default_factory=list)
 
 
+class ResolutionCertificate(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    resolver_id: str = Field(min_length=1)
+    digest: str = Field(min_length=64, max_length=64)
+
+
 class IntentResolution(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -50,6 +56,7 @@ class IntentResolution(BaseModel):
     errors: list[ResolutionError] = Field(default_factory=list)
     explicit_count: int | None = Field(default=None, ge=1, le=512)
     component_templates: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    certificate: ResolutionCertificate | None = None
 
     @property
     def resolved(self) -> bool:

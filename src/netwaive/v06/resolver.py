@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import uuid
 from typing import Any, Protocol
 
-from .contracts import IntentResolution, ResolutionError, ResolutionKind, ResolvedRef
+from .contracts import IntentResolution, ResolutionCertificate, ResolutionError, ResolutionKind, ResolvedRef
 
 
 class ReadOnlyGateway(Protocol):
@@ -24,6 +27,7 @@ class ReadOnlyResolver:
 
     def __init__(self, gateway: ReadOnlyGateway):
         self.gateway = gateway
+        self.resolver_id = str(uuid.uuid4())
 
     def resolve(self, kind: ResolutionKind, requested: str) -> ResolvedRef | ResolutionError:
         value = str(requested or "").strip()
@@ -66,7 +70,20 @@ class ReadOnlyResolver:
                 errors.append(result)
             else:
                 resolved[kind.value] = result
-        return IntentResolution(request_text=request_text, model=model, name=name, refs=resolved, errors=errors, explicit_count=explicit_count, component_templates=component_templates or {})
+        intent = IntentResolution(request_text=request_text, model=model, name=name, refs=resolved, errors=errors, explicit_count=explicit_count, component_templates=component_templates or {})
+        return self.certify(intent)
+
+    def certify(self, intent: IntentResolution) -> IntentResolution:
+        payload = json.dumps(intent.model_dump(mode="json", exclude={"certificate"}), sort_keys=True, ensure_ascii=False).encode()
+        certificate = ResolutionCertificate(resolver_id=self.resolver_id, digest=hashlib.sha256(payload).hexdigest())
+        return intent.model_copy(update={"certificate": certificate})
+
+    def verify(self, intent: IntentResolution) -> bool:
+        certificate = intent.certificate
+        if certificate is None or certificate.resolver_id != self.resolver_id:
+            return False
+        payload = json.dumps(intent.model_dump(mode="json", exclude={"certificate"}), sort_keys=True, ensure_ascii=False).encode()
+        return certificate.digest == hashlib.sha256(payload).hexdigest()
 
     @staticmethod
     def _ref(kind: ResolutionKind, app: str, endpoint: str, requested: str, record: dict[str, Any]) -> ResolvedRef | None:

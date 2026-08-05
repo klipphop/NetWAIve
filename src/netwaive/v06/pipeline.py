@@ -21,6 +21,8 @@ class V06Pipeline:
 
     def plan(self, scope: SessionScope, request_text: str, intent: IntentResolution) -> PendingPlan:
         generation = scope.begin_request()
+        if not self.resolver.verify(intent):
+            raise ValueError("Intent non certifiée par cette instance du Resolver.")
         route = self.router.route(intent)
         certified = CertifiedPlanInput(
             session_id=scope.session_id,

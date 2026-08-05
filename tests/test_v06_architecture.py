@@ -44,6 +44,7 @@ def test_router_selects_ndx_only_on_exact_model():
 
 def certified(intent):
     route = RouteDecision(kind=RouteKind.CUSTOM_PLAN, reason="custom")
+    intent = ReadOnlyResolver(Gateway({})).certify(intent)
     return CertifiedPlanInput(session_id="s", generation="g", fingerprint=intent_fingerprint(intent.request_text, intent), intent=intent, route=route)
 
 
@@ -85,8 +86,10 @@ def test_pipeline_facade_enforces_plan_then_confirm_scope():
         def import_ndx_object(self, arguments): return ToolResult(ok=True, message="ok", data={"id": 1})
     gateway = Gateway({})
     intent = IntentResolution(request_text="x", model="X", refs={"manufacturer": ResolvedRef(id=1, app="dcim", endpoint="manufacturers", kind=ResolutionKind.MANUFACTURER, display="Generic", requested="Generic")})
+    resolver = ReadOnlyResolver(gateway)
+    intent = resolver.certify(intent)
     scope = SessionScope.new("session")
-    pipeline = V06Pipeline(ReadOnlyResolver(gateway), IntentRouter(NDX()), DeterministicPlanner(), ExecutionEngine(Port()))
+    pipeline = V06Pipeline(resolver, IntentRouter(NDX()), DeterministicPlanner(), ExecutionEngine(Port()))
     plan = pipeline.plan(scope, "x", intent)
     assert pipeline.confirm(scope, plan.fingerprint).ok
     with pytest.raises(ValueError): pipeline.confirm(scope, plan.fingerprint)

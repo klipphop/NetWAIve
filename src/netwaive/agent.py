@@ -752,8 +752,16 @@ class NetBoxAgent:
             raw_data = call.arguments.get("data")
             data: dict[str, Any] = dict(raw_data) if isinstance(raw_data, dict) else {}
             endpoint = str(call.arguments.get("endpoint") or "").replace("_", "-").lower()
+            if call.name != "netbox_write" or endpoint not in component_endpoints:
+                expanded_pending.append(call)
+                continue
+            parent_value = next((data.get(key) for key in ("device_type", "module_type", "device", "module") if data.get(key) not in (None, "")), None)
+            valid_parent = isinstance(parent_value, int) and not isinstance(parent_value, bool) and parent_value > 0
+            valid_parent = valid_parent or (isinstance(parent_value, str) and (parent_value.startswith("${") or (parent_value.isdigit() and int(parent_value) > 0)))
+            if not valid_parent:
+                return [], [f"Composant {call.id} sans référence parentale valide ; plan bloqué."], []
             has_quantity = any(key in data for key in ("quantity", "count", "qty"))
-            if call.name != "netbox_write" or endpoint not in component_endpoints or not has_quantity:
+            if not has_quantity:
                 expanded_pending.append(call)
                 continue
             try:
@@ -1117,6 +1125,23 @@ class NetBoxAgent:
         return mapped
 
     @classmethod
+    def _component_parent_errors(cls, pending: list[PendingToolCall]) -> list[str]:
+        component_endpoints = set(NDX_COMPONENT_ENDPOINTS.values())
+        errors: list[str] = []
+        for call in pending:
+            endpoint = str(call.arguments.get("endpoint") or "").replace("_", "-").lower()
+            if call.name != "netbox_write" or endpoint not in component_endpoints:
+                continue
+            raw_data = call.arguments.get("data")
+            data = raw_data if isinstance(raw_data, dict) else {}
+            parent = next((data.get(key) for key in ("device_type", "module_type", "device", "module") if data.get(key) not in (None, "")), None)
+            valid = isinstance(parent, int) and not isinstance(parent, bool) and parent > 0
+            valid = valid or (isinstance(parent, str) and (parent.startswith("${") or (parent.isdigit() and int(parent) > 0)))
+            if not valid:
+                errors.append(f"Composant {call.id} sans référence parentale valide ; plan bloqué.")
+        return errors
+
+    @classmethod
     def _sanitize_plan(cls, pending: list[PendingToolCall]) -> tuple[list[PendingToolCall], list[str]]:
         """Deduplicate exact calls and reject unresolved/unknown symbolic references before confirmation."""
         errors: list[str] = []
@@ -1188,6 +1213,9 @@ class NetBoxAgent:
         history: list[dict[str, str]] | None = None,
     ) -> AgentResponse:
         """Exécute exactement le lot approuvé et clôt immédiatement ce cycle."""
+        parent_errors = self._component_parent_errors(pending)
+        if parent_errors:
+            return AgentResponse(message="Plan refusé avant exécution : " + " ".join(parent_errors), tool_results=[])
         ordered, sanitation_errors = self._sanitize_plan(pending)
         if sanitation_errors:
             return AgentResponse(message="Plan refusé avant exécution : " + " ".join(sanitation_errors), tool_results=[])

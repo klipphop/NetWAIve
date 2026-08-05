@@ -170,7 +170,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.5.1-P7", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.5.1-P8", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -227,6 +227,7 @@ def chat_api(request):
 
     if pending and not (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide", "non", "n", "annule", "annuler"}):
         active["pending_write"] = None
+        active.pop("allow_session", None)
         pending = None
 
     if pending and normalized in {"non", "n", "annule", "annuler"}:

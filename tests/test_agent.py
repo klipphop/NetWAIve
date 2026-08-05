@@ -1074,3 +1074,18 @@ def test_explicit_user_count_forces_exact_component_cardinality():
     for text in ("Create 8 components", "Crée 8 composants"):
         repeated, repeated_errors, _ = agent._prepare_pending_plan(pending, request_text=text)
         assert repeated_errors == [] and len(repeated) == 8
+
+
+def test_orphan_component_is_blocked_before_pending():
+    agent = NetBoxAgent(settings(), tools=FakeTools(), client=FakeClient([]))
+    orphan = PendingToolCall(id="orphan-port", name="netbox_write", arguments={
+        "app": "dcim", "endpoint": "power-port-templates", "action": "create",
+        "data": {"name": "Power Port 1", "type": "type-e", "device_type": "Power Strip 8 ports"},
+    })
+    pending, errors, _ = agent._prepare_pending_plan([orphan])
+    assert pending == []
+    assert errors and "parentale" in errors[0]
+    zero = orphan.model_copy(update={"id": "zero", "arguments": {**orphan.arguments, "data": {**orphan.arguments["data"], "device_type": "0"}}})
+    assert agent._prepare_pending_plan([zero])[1]
+    direct = agent.confirm("confirme", [orphan])
+    assert direct.tool_results == [] and "parentale" in direct.message

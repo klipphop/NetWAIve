@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-P8] - 2026-08-05
+
+### Fixed
+- Invalidate pending writes and session-scoped write approval when a new non-confirmation request arrives.
+- Enforce parent-before-child component planning and document strict typed parent references.
+- Keep strict `call_...` suffix normalization and the Generic/model/count guarantees from P7.
+
+### Tests
+- Added session isolation regression covering stale Power Strip pending state before a new Catalyst request.
+
 ## [0.5.1-P7] - 2026-08-05
 
 ### Fixed

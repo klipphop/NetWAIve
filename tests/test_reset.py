@@ -172,3 +172,39 @@ def test_frontend_waits_for_backend_before_clearing_dom():
     assert "activeChatController?.abort()" in floating_handler
     assert "resetEpoch += 1" in chat_handler
     assert "resetEpoch += 1" in floating_handler
+
+
+def test_new_request_invalidates_previous_pending_and_session_write_scope(monkeypatch):
+    import json
+    from netwaive.models import AgentResponse
+
+    request = dirty_request()
+    state = views._load_state(request)
+    active = views._active_session(state)
+    active["pending_write"] = {"message": "Power Strip", "calls": []}
+    active["allow_session"] = True
+    views._save_state(request, state)
+    request.body = json.dumps({"message": "Crée un Catalyst"}).encode()
+    request.user = SimpleNamespace(is_superuser=False, groups=SimpleNamespace(filter=lambda **kwargs: []))
+
+    class Agent:
+        def __init__(self, settings): pass
+        @staticmethod
+        def _detect_language(message): return "fr"
+        def run(self, message, history=None): return AgentResponse(message="nouveau contexte")
+
+    monkeypatch.setattr(views, "NetBoxAgent", Agent)
+    monkeypatch.setattr(views, "_agent_settings", lambda: None)
+    class Response:
+        status_code = 200
+        def __init__(self, payload, status=200): self.payload = payload; self.status_code = status
+        def __setitem__(self, key, value): pass
+    monkeypatch.setattr(views, "JsonResponse", Response)
+    endpoint = views.chat_api
+    while hasattr(endpoint, "__wrapped__"): endpoint = endpoint.__wrapped__
+    response = endpoint(request)
+    assert response.status_code == 200
+    fresh = views._load_state(request)
+    current = views._active_session(fresh)
+    assert current["pending_write"] is None
+    assert "allow_session" not in current

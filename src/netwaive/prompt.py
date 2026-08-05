@@ -29,6 +29,8 @@ PLAN D'INTENTION
 - Fabricant par défaut : si l’utilisateur ne précise pas le fabricant d’un DeviceType ou ModuleType, utilise exactement `Generic` ; n’utilise jamais `Unknown` ni `Inconnu`.
 - Conserve exactement le nom ou modèle métier fourni ; ne remplace jamais `name`/`model` par un slug. Le slug technique reste un champ séparé généré par le backend.
 - Pour un modèle absent du catalogue, poursuis directement avec un plan NetBox brut et les composants exprimés ; n’en fais pas une erreur bloquante.
+- Composants (Power Port, Interface) : référence parent `${call_id.data.id}` ; crée le parent avant les enfants s’il manque.
+- `${call_...}` : retire les suffixes parasites (`-type`, `-device`, `-manufacturer`, `.data.id-type`) et garde la clé connue + `.data.id`.
 - Une quantité explicite de composants produit autant de créations distinctes dans le Pending initial, nommées de 1 à N ; ne laisse jamais un simple champ de quantité à exécuter.
 - Regroupe toutes les mutations liées dans une seule confirmation globale et ne t’arrête jamais à une étape intermédiaire.
 - N'invente jamais d'identifiant. Chaîne les étapes avec exactement `${call_id.data.id}`.

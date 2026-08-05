@@ -370,6 +370,9 @@ class NetBoxTools:
         if args.action != "create":
             return arguments
         data = dict(args.data)
+        endpoint_name = self._normalize(args.endpoint)
+        if self._normalize(args.app) == "dcim" and endpoint_name in {"devicetypes", "moduletypes"} and not data.get("model") and data.get("name"):
+            data["model"] = data.pop("name")
         try:
             schema_result = self.get_endpoint_schema(GetEndpointSchemaArgs(app=args.app, endpoint=args.endpoint))
             schema = schema_result.data if schema_result.ok and isinstance(schema_result.data, dict) else {}
@@ -452,16 +455,24 @@ class NetBoxTools:
                 return ToolResult(ok=False, message="Valeur invalide : " + json.dumps({"field": field, "value": value, "choices": enum}, ensure_ascii=False), data={"invalid_field": field, "choices": enum})
         return None
 
+    @staticmethod
+    def _manufacturer_name(value: Any) -> str:
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("display") or value.get("slug")
+        if isinstance(value, bool) or isinstance(value, int) or not str(value or "").strip():
+            return "Generic"
+        normalized = str(value).strip()
+        if normalized.casefold() in {"unknown", "inconnu"} or normalized.isdigit():
+            return "Generic"
+        return normalized
+
     def prepare_ndx_object(self, data: dict[str, Any], object_type: str) -> ToolResult:
         model = str(data.get("model") or data.get("part_number") or "Generic").strip() or "Generic"
         candidates = self.ndx.search(model)
         payload = self.ndx.build_payload(model, object_type=object_type)
         if payload is None:
             if not candidates:
-                manufacturer = data.get("manufacturer")
-                if isinstance(manufacturer, dict):
-                    manufacturer = manufacturer.get("name") or manufacturer.get("display") or manufacturer.get("slug")
-                manufacturer = str(manufacturer or "Generic").strip() or "Generic"
+                manufacturer = self._manufacturer_name(data.get("manufacturer"))
                 components = data.get("component_templates") or data.get("components") or {}
                 if not isinstance(components, dict):
                     components = {}

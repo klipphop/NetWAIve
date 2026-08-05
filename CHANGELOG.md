@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-P6] - 2026-08-05
+
+### Fixed
+- Normalize numeric, `Unknown`, and `Inconnu` manufacturer inputs to the canonical `Generic` name before raw DeviceType/ModuleType creation and plan-time lookup.
+- Map a DeviceType/ModuleType business `name` to its exact `model` field without allowing slug enrichment to overwrite the display value; composite NDX payloads preserve the requested model.
+- Parse explicit user component counts and force the Pending plan to exactly N distinct numbered component creates when the LLM under-expands the request.
+
+### Changed
+- The system prompt now states exact model/name preservation and separate technical slug generation.
+
+### Tests
+- Added regressions for numeric manufacturer `14`, Generic reuse, exact model preservation, and 5-to-8 component correction.
+
 ## [0.5.1-P5] - 2026-08-05
 
 ### Changed

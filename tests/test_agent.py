@@ -428,6 +428,8 @@ def test_system_prompt_is_intent_only_and_delegates_backend_fallbacks():
     assert "quantité explicite de composants" in prompt
     assert "fabricant par défaut" in prompt
     assert "exactement `generic`" in prompt
+    assert "ne remplace jamais" in prompt
+    assert "slug technique reste un champ séparé" in prompt
     assert "unknown" in prompt and "inconnu" in prompt
     for forbidden in (
         "avant chaque mutation",
@@ -1034,3 +1036,41 @@ def test_read_tool_result_is_returned_to_llm():
 
 
 
+
+
+def test_numeric_manufacturer_is_normalized_to_generic_for_raw_fallback():
+    class MissingNDX:
+        def search(self, model): return []
+        def build_payload(self, model, object_type="device-type"): return None
+
+    tools = object.__new__(NetBoxTools)
+    tools.ndx = MissingNDX()
+    result = tools.prepare_ndx_object({"model": "CUSTOM", "manufacturer": 14}, "device-type")
+    assert result.ok
+    assert result.data["raw_fallback"]["manufacturer"] == "Generic"
+
+
+def test_device_type_name_maps_to_exact_model_without_slug_override():
+    tools = object.__new__(NetBoxTools)
+    tools.get_endpoint_schema = lambda args: ToolResult(ok=True, message="schema", data={
+        "required_fields": ["model", "slug"], "writable_fields": {"model": {}, "slug": {}}
+    })
+    enriched = tools.enrich_write_arguments({"app":"dcim", "endpoint":"device-types", "action":"create", "data":{"name":"Power Strip 8 ports"}})
+    assert enriched["data"]["model"] == "Power Strip 8 ports"
+    assert enriched["data"]["slug"] == "power-strip-8-ports"
+    assert "name" not in enriched["data"]
+
+
+def test_explicit_user_count_forces_exact_component_cardinality():
+    agent = NetBoxAgent(settings(), tools=FakeTools(), client=FakeClient([]))
+    pending = [PendingToolCall(id=f"port-{i}", name="netbox_write", arguments={
+        "app":"dcim", "endpoint":"power-port-templates", "action":"create",
+        "data":{"name":f"Power Port {i}", "type":"type-e", "device_type":9}
+    }) for i in range(1, 6)]
+    expanded, errors, _ = agent._prepare_pending_plan(pending, request_text="Crée 8 power ports type E")
+    assert errors == []
+    assert len(expanded) == 8
+    assert [call.arguments["data"]["name"] for call in expanded] == [f"Power Port {i}" for i in range(1, 9)]
+    for text in ("Create 8 components", "Crée 8 composants"):
+        repeated, repeated_errors, _ = agent._prepare_pending_plan(pending, request_text=text)
+        assert repeated_errors == [] and len(repeated) == 8

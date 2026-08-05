@@ -615,7 +615,7 @@ class NetBoxAgent:
         parent_id = f"{base_id}-type"
         manufacturer, error = self._pending_write_call(manufacturer_id, {
             "app": "dcim", "endpoint": "manufacturers", "action": "create",
-            "data": {"name": str(fallback.get("manufacturer") or "Generic")},
+            "data": {"name": NetBoxTools._manufacturer_name(fallback.get("manufacturer"))},
         })
         if error is not None or manufacturer is None:
             return [], error, ""
@@ -671,7 +671,7 @@ class NetBoxAgent:
             return None, None
         prepared = preparer({
             "model": model,
-            "manufacturer": data.get("manufacturer") or "Generic",
+            "manufacturer": NetBoxTools._manufacturer_name(data.get("manufacturer")),
             "components": data.get("components") or data.get("component_templates") or {},
             "u_height": data.get("u_height") or 1,
         }, "device-type")
@@ -683,10 +683,16 @@ class NetBoxAgent:
         composite = prepared_data.get("composite")
         if isinstance(composite, dict) and isinstance(composite.get("payload"), dict):
             type_call_id = f"{call_id}-type"
+            payload = dict(composite["payload"])
+            requested_model = data.get("model") or data.get("name")
+            if requested_model:
+                parent = dict(payload.get("parent") or {})
+                parent["model"] = str(requested_model)
+                payload["parent"] = parent
             calls.append(PendingToolCall(
                 id=type_call_id,
                 name="import_ndx_object",
-                arguments={"payload": composite["payload"]},
+                arguments={"payload": payload},
             ))
             type_reference = f"${{{type_call_id}.data.id}}"
         elif isinstance(prepared_data.get("raw_fallback"), dict):
@@ -729,9 +735,15 @@ class NetBoxAgent:
         calls.append(device)
         return calls, None
 
+    @staticmethod
+    def _requested_component_count(request_text: str) -> int | None:
+        match = re.search(r"\b(\d{1,4})\s+(?:power\s+)?(?:ports?|interfaces?|components?|composants?|connecteurs?|ports?\s+d[’']alimentation)\b", request_text.casefold())
+        return int(match.group(1)) if match else None
+
     def _prepare_pending_plan(
         self,
         pending: list[PendingToolCall],
+        request_text: str = "",
     ) -> tuple[list[PendingToolCall], list[str], list[ToolResult]]:
         """Reuse exact live objects before showing Pending and rewrite their dependent IDs."""
         expanded_pending: list[PendingToolCall] = []
@@ -754,6 +766,22 @@ class NetBoxAgent:
                     "id": call.id if index == 1 else f"{call.id}-{index}",
                     "arguments": arguments,
                 }))
+        requested = self._requested_component_count(request_text)
+        component_positions = [index for index, call in enumerate(expanded_pending) if str(call.arguments.get("endpoint") or "").replace("_", "-").lower() in component_endpoints]
+        if requested is not None and component_positions and len(component_positions) != requested:
+            first_position = component_positions[0]
+            first_call = expanded_pending[first_position]
+            first_data = first_call.arguments.get("data") if isinstance(first_call.arguments.get("data"), dict) else {}
+            try:
+                forced_components = self._expand_component_spec({**first_data, "quantity": requested})
+            except ValueError as exc:
+                return [], [str(exc)], []
+            forced_calls = [first_call.model_copy(update={
+                "id": first_call.id if index == 1 else f"{first_call.id}-{index}",
+                "arguments": {**first_call.arguments, "data": component},
+            }) for index, component in enumerate(forced_components, start=1)]
+            expanded_pending = [call for index, call in enumerate(expanded_pending) if index not in component_positions]
+            expanded_pending[first_position:first_position] = forced_calls
         ordered, errors = self._sanitize_plan(expanded_pending)
         if errors:
             return ordered, errors, []
@@ -803,6 +831,7 @@ class NetBoxAgent:
         planned: list[PendingToolCall] | None = None,
         language: str = "fr",
         require_live_plan: bool = False,
+        request_text: str = "",
     ) -> AgentResponse:
         collected = list(results or [])
         write_plan = list(planned or [])
@@ -884,7 +913,7 @@ class NetBoxAgent:
                         })
                         plan_completion_repair_used = True
                         continue
-                    write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan)
+                    write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan, request_text=request_text)
                     collected.extend(reused_results)
                     if sanitation_errors:
                         return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
@@ -1004,7 +1033,7 @@ class NetBoxAgent:
                         if signature not in signatures:
                             write_plan.append(pending_call)
                             signatures.add(signature)
-                        write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan)
+                        write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan, request_text=request_text)
                         collected.extend(reused_results)
                         if sanitation_errors:
                             return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
@@ -1031,7 +1060,7 @@ class NetBoxAgent:
                 })
 
         if write_plan:
-            write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan)
+            write_plan, sanitation_errors, reused_results = self._prepare_pending_plan(write_plan, request_text=request_text)
             collected.extend(reused_results)
             if sanitation_errors:
                 return AgentResponse(message="Plan refusé avant confirmation : " + " ".join(sanitation_errors), tool_results=collected)
@@ -1061,6 +1090,7 @@ class NetBoxAgent:
             confirm_write=confirm_write,
             language=self._detect_language(user_message),
             require_live_plan=self._is_explicit_write_request(user_message),
+            request_text=user_message,
         )
 
     @staticmethod

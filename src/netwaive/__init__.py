@@ -4,7 +4,7 @@ from .config import Settings
 from .tools import NetBoxTools
 
 __all__ = ["AgentResponse", "NetBoxAgent", "NetBoxTools", "Settings", "V06Pipeline"]
-__version__ = "0.6.3"
+__version__ = "0.6.4"
 
 from .v06 import V06Pipeline
 

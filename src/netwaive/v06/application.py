@@ -40,11 +40,21 @@ class V06Application:
             ExecutionEngine(self.tools),
         )
 
-    def read_only_response(self, request_text: str) -> str | None:
-        """Serve unambiguous RO requests without entering the planner."""
+    def read_only_response(self, request_text: str, history: list[dict[str, str]] | None = None) -> str | None:
+        """Serve toute demande RO sans entrer dans le planner."""
         text = request_text.casefold().strip()
+        history_text = " ".join(str(item.get("text", "")).casefold() for item in (history or []))
         if re.fullmatch(r"(?:salut|bonjour|hello|hi|hey)[!. ]*", text):
             return "Bonjour. Je peux consulter NetBox en lecture seule ou préparer un plan de modification à confirmer."
+        if not IntentRouter.is_read_only(request_text):
+            return None
+        device_context = bool(re.search(r"\b(?:device|devices|équipement|équipements|equipement|equipements)\b", history_text))
+        if device_context and re.search(r"\b(?:tous|toutes|global|globale)\b", text):
+            devices = self.read_gateway.read("dcim", "devices", filters={})
+            if not devices:
+                return "Aucun device NetBox trouvé."
+            names = [str(item.get("display") or item.get("name") or item.get("id")) for item in devices]
+            return "Tous les devices NetBox :\n" + "\n".join(f"- {name}" for name in names)
         if re.search(r"\b(?:liste|list|lister|affiche|afficher|show)\b.*\b(?:device|devices|équipements|equipements)\b", text):
             site_match = re.search(r"\b(?:site|du site|at)\s+(.+?)\s*[?.!]*$", request_text, re.IGNORECASE)
             if not site_match:
@@ -75,8 +85,7 @@ class V06Application:
                 return "Aucun site NetBox trouvé."
             names = [str(item.get("display") or item.get("name") or item.get("id")) for item in records]
             return "Sites NetBox :\n" + "\n".join(f"- {name}" for name in names)
-        return None
-
+        return "Demande de consultation détectée. Précisez l’objet NetBox à afficher."
     def plan(self, request_text: str, scope: SessionScope):
         intent = self.extractor.extract(request_text)
         plan = self.pipeline.plan(scope, request_text, intent)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Protocol
 
 from .contracts import IntentResolution, RouteDecision, RouteKind
@@ -10,6 +11,13 @@ class NDXReadOnly(Protocol):
 
 
 class IntentRouter:
+    READ_WORDS = re.compile(r"\b(?:liste|list|lister|affiche|afficher|montre|montrer|cherche|chercher|quels?|quelles?|tous|toutes|show|list)\b", re.IGNORECASE)
+    WRITE_WORDS = re.compile(r"\b(?:crée|creer|créer|create|ajoute|ajouter|add|modifie|modifier|supprime|supprimer|delete|change|changer)\b", re.IGNORECASE)
+
+    @classmethod
+    def is_read_only(cls, request_text: str) -> bool:
+        return bool(cls.READ_WORDS.search(request_text)) and not bool(cls.WRITE_WORDS.search(request_text))
+
     """Choisit NDX ou custom sans mutation et sans recherche floue locale."""
 
     def __init__(self, ndx: NDXReadOnly):

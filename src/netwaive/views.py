@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from functools import wraps
 from typing import Any
 
 from django.conf import settings as django_settings
@@ -173,7 +174,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.6.1", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.6.2", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -200,6 +201,16 @@ def history_api(request):
     return JsonResponse(_state_payload(state))
 
 
+def _json_errors(view):
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        try:
+            return view(request, *args, **kwargs)
+        except Exception:
+            return JsonResponse({"error": "Erreur interne NetWAIve."}, status=400)
+    return wrapped
+
+
 def _v06_enabled() -> bool:
     try:
         return bool(_plugin_config().get("v06_enabled", False))
@@ -209,6 +220,13 @@ def _v06_enabled() -> bool:
 
 def _v06_chat(request, state, active, message, body):
     app = V06Application(_agent_settings())
+    read_answer = app.read_only_response(message)
+    if read_answer is not None:
+        active["pending_write"] = None
+        _append_history(active, "user", message)
+        _append_history(active, "assistant", read_answer)
+        _save_state(request, state)
+        return JsonResponse({**_state_payload(state), "message": read_answer, "conversation_id": active["id"], "execution_status": "read_only"})
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
     if pending and bool(body.get("approve_pending")):
         plan = PendingPlan.model_validate({"session_id": active["id"], "generation": pending["generation"], "fingerprint": pending["fingerprint"], "calls": pending["calls"]})
@@ -231,6 +249,7 @@ def _v06_chat(request, state, active, message, body):
 
 @login_required
 @require_POST
+@_json_errors
 def chat_api(request):
     try:
         body = json.loads(request.body or b"{}")

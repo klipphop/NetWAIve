@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from functools import wraps
 from typing import Any
@@ -19,6 +20,8 @@ from .models import PendingToolCall, AgentResponse
 from .v06.application import V06Application
 from .v06.contracts import PendingPlan
 from .v06.session import SessionScope
+
+logger = logging.getLogger(__name__)
 
 SESSION_KEY = "netwaive_state"
 MAX_HISTORY = 100
@@ -174,7 +177,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.6.2", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.6.3", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -207,6 +210,7 @@ def _json_errors(view):
         try:
             return view(request, *args, **kwargs)
         except Exception:
+            logger.exception("netwaive chat request failed", extra={"path": request.path, "method": request.method})
             return JsonResponse({"error": "Erreur interne NetWAIve."}, status=400)
     return wrapped
 

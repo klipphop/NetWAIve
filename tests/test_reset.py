@@ -88,7 +88,7 @@ def test_inflight_chat_cannot_restore_state_after_reset(monkeypatch):
             return AgentResponse(message="ancienne réponse")
 
     monkeypatch.setattr(views, "JsonResponse", Response)
-    monkeypatch.setattr(views, "NetBoxAgent", Agent)
+    monkeypatch.setattr(views, "build_agent", lambda settings: Agent(settings))
     monkeypatch.setattr(views, "_agent_settings", lambda: None)
     endpoint = views.chat_api
     while hasattr(endpoint, "__wrapped__"): endpoint = endpoint.__wrapped__
@@ -122,7 +122,7 @@ def test_chat_converts_upstream_504_html_to_clean_json(monkeypatch):
     request.body = json.dumps({"message": "Crée un site"}).encode()
     request.user = SimpleNamespace()
     monkeypatch.setattr(views, "JsonResponse", Response)
-    monkeypatch.setattr(views, "NetBoxAgent", Agent)
+    monkeypatch.setattr(views, "build_agent", lambda settings: Agent(settings))
     monkeypatch.setattr(views, "_agent_settings", lambda: None)
     endpoint = views.chat_api
     while hasattr(endpoint, "__wrapped__"): endpoint = endpoint.__wrapped__
@@ -193,7 +193,7 @@ def test_new_request_invalidates_previous_pending_and_session_write_scope(monkey
         def _detect_language(message): return "fr"
         def run(self, message, history=None): return AgentResponse(message="nouveau contexte")
 
-    monkeypatch.setattr(views, "NetBoxAgent", Agent)
+    monkeypatch.setattr(views, "build_agent", lambda settings: Agent(settings))
     monkeypatch.setattr(views, "_agent_settings", lambda: None)
     class Response:
         status_code = 200

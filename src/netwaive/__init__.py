@@ -1,35 +1,28 @@
-"""NetWAIve."""
-from .agent import NetBoxAgent, AgentResponse
-from .config import Settings
-from .tools import NetBoxTools
-
-__all__ = ["AgentResponse", "NetBoxAgent", "NetBoxTools", "Settings", "V06Pipeline"]
-__version__ = "0.6.4"
-
-from .v06 import V06Pipeline
-
-try:  # Chargé uniquement dans le venv NetBox.
+try:
     from netbox.plugins import PluginConfig
+except ImportError:  # Tests hors environnement NetBox.
+    class PluginConfig:
+        django_apps: list[str] = []
+        min_version = None
+        max_version = None
 
-    class NetWAIveConfig(PluginConfig):
-        name = "netwaive"
-        verbose_name = "NetWAIve"
-        description = "Assistant LLM NetBox utilisant exclusivement pynetbox"
-        version = __version__
-        author = "NetDevOps"
-        base_url = "netwaive"
-        min_version = "4.0.0"
-        default_settings = {
-            "write_enabled": False,
-            "netbox_url": "",
-            "netbox_token": "",
-            "netbox_verify_ssl": True,
-            "llm_base_url": "",
-            "llm_api_key": "",
-            "llm_model": "",
-        }
+        @classmethod
+        def validate(cls, config: dict, release: str) -> None:
+            return None
 
-    config = NetWAIveConfig
-    __all__.append("NetWAIveConfig")
-except ModuleNotFoundError:
-    config = None
+from .config import Settings
+from .models import AgentResponse, PendingToolCall, ToolResult
+
+
+class NetWAIveConfig(PluginConfig):
+    name = "netwaive"
+    verbose_name = "NetBox Assistant"
+    description = "Lightweight NetBox MCP client with RW approval gate."
+    version = "0.1.0"
+    base_url = "netwaive"
+    min_version = "4.4.0"
+
+
+config = NetWAIveConfig
+__version__ = "0.1.0"
+__all__ = ["AgentResponse", "PendingToolCall", "Settings", "ToolResult", "NetWAIveConfig", "config"]

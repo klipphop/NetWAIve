@@ -14,12 +14,9 @@ from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_POST
 from django.utils.translation import get_language
 
-from .agent import NetBoxAgent
 from .config import Settings
-from .models import PendingToolCall, AgentResponse
-from .v06.application import V06Application
-from .v06.contracts import PendingPlan
-from .v06.session import SessionScope
+from .models import PendingToolCall
+from .v01 import build_agent
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +67,7 @@ def _agent_settings() -> Settings:
         key: cfg[key]
         for key in (
             "netbox_url", "netbox_token", "netbox_verify_ssl", "llm_base_url",
-            "llm_api_key", "llm_model", "llm_timeout", "max_agent_turns",
+            "llm_api_key", "llm_model", "mcp_server_url", "mcp_auth_token", "llm_timeout", "max_agent_turns",
             "max_search_results",
         )
         if cfg.get(key) not in (None, "")
@@ -185,7 +182,7 @@ def chat(request):
 def health_api(request):
     try:
         configured = _agent_settings()
-        NetBoxAgent(configured)
+        build_agent(configured)
         return JsonResponse({
             "configured": True,
             "model": configured.llm_model,
@@ -215,42 +212,6 @@ def _json_errors(view):
     return wrapped
 
 
-def _v06_enabled() -> bool:
-    try:
-        return bool(_plugin_config().get("v06_enabled", False))
-    except Exception:
-        return False
-
-
-def _v06_chat(request, state, active, message, body):
-    app = V06Application(_agent_settings())
-    read_answer = app.read_only_response(message, history=active.get("history", []))
-    if read_answer is not None:
-        active["pending_write"] = None
-        _append_history(active, "user", message)
-        _append_history(active, "assistant", read_answer)
-        _save_state(request, state)
-        return JsonResponse({**_state_payload(state), "message": read_answer, "conversation_id": active["id"], "execution_status": "read_only"})
-    pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
-    if pending and bool(body.get("approve_pending")):
-        plan = PendingPlan.model_validate({"session_id": active["id"], "generation": pending["generation"], "fingerprint": pending["fingerprint"], "calls": pending["calls"]})
-        scope = SessionScope(active["id"], pending["generation"], plan)
-        report = app.confirm(scope, pending["fingerprint"])
-        answer = "Configuration exécutée." if report.ok else "Exécution v0.6 bloquée."
-        active["pending_write"] = None
-        status = "success" if report.ok else "failed"
-    else:
-        scope = SessionScope.new(active["id"])
-        plan = app.plan(message, scope)
-        active["pending_write"] = {"message": message, "generation": scope.generation, "fingerprint": plan.fingerprint, "calls": [call.model_dump() for call in plan.calls]}
-        answer = f"Plan v0.6 prêt : {len(plan.calls)} opération(s). Confirmation requise."
-        status = "pending"
-    _append_history(active, "user", message)
-    _append_history(active, "assistant", answer)
-    _save_state(request, state)
-    return JsonResponse({**_state_payload(state), "message": answer, "conversation_id": active["id"], "execution_status": status})
-
-
 @login_required
 @require_POST
 @_json_errors
@@ -262,103 +223,40 @@ def chat_api(request):
     message = str(body.get("message") or "").strip()
     if not message:
         return JsonResponse({"error": "Message vide."}, status=400)
-    normalized = message.casefold()
-
     state = _load_state(request)
     request_generation = state["generation"]
     active = _active_session(state, str(body.get("conversation_id") or "") or None)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
-    if _v06_enabled():
-        return _v06_chat(request, state, active, message, body)
-    language = NetBoxAgent._detect_language(message)
-    try:
-        agent = NetBoxAgent(_agent_settings())
-    except Exception as exc:
-        timeout_response = _gateway_timeout_response(exc, language)
-        if timeout_response is not None:
-            return timeout_response
-        raise
-    approved = bool(body.get("approve_pending"))
-    approval_scope = str(body.get("approval_scope") or "once")
-    execution_status = "none"
-
-    if pending and not (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide", "non", "n", "annule", "annuler"}):
-        active["pending_write"] = None
-        active.pop("allow_session", None)
-        pending = None
-
-    if pending and normalized in {"non", "n", "annule", "annuler"}:
-        active["pending_write"] = None
-        execution_status = "cancelled"
-        answer = "Action cancelled. No NetBox write was executed." if language == "en" else "Action annulée. Aucune écriture NetBox n’a été exécutée."
-    elif pending and (approved or normalized in {"oui", "o", "confirme", "je confirme", "valide", "je valide"}):
-        if not _can_write(request.user):
-            active["pending_write"] = None
-            answer = "Writes are not authorized for this NetBox account." if language == "en" else "Écriture non autorisée pour ce compte NetBox."
-        else:
-            if approval_scope == "session":
-                active["allow_session"] = True
-            else:
-                active.pop("allow_session", None)
-            calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
-            pending_history = pending.get("history") if isinstance(pending.get("history"), list) else active.get("history", [])
-            result, timeout_response = _safe_agent_call(
-                lambda: agent.confirm(str(pending.get("message") or ""), calls, history=pending_history), language
-            )
-            if timeout_response is not None:
-                return timeout_response
-            assert result is not None
-            answer = result.message
-            execution_status = "success" if len(result.tool_results) == len(calls) and all(item.ok for item in result.tool_results) else "failed"
-            if execution_status == "success" and result.pending_confirmation:
-                active["pending_write"] = {
-                    "message": str(pending.get("message") or ""),
-                    "calls": [item.model_dump() for item in result.pending_confirmation],
-                    "history": pending_history,
-                }
-            else:
-                active["pending_write"] = None
-    else:
-        recent_history = list(active.get("history", []))[-16:]
-        result, timeout_response = _safe_agent_call(lambda: agent.run(message, history=recent_history), language)
+    agent = build_agent(_agent_settings())
+    if pending and bool(body.get("approve_pending")):
+        calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
+        result, timeout_response = _safe_agent_call(lambda: agent.confirm(calls), "fr")
         if timeout_response is not None:
             return timeout_response
         assert result is not None
         answer = result.message
-        if result.pending_confirmation:
-            if active.get("allow_session") and _can_write(request.user):
-                executed, timeout_response = _safe_agent_call(
-                    lambda: agent.confirm(message, result.pending_confirmation, history=recent_history), language
-                )
-                if timeout_response is not None:
-                    return timeout_response
-                assert executed is not None
-                answer = executed.message
-                execution_status = "success" if len(executed.tool_results) == len(result.pending_confirmation) and all(item.ok for item in executed.tool_results) else "failed"
-                active["pending_write"] = None
-            elif not _can_write(request.user):
-                answer = "This request requires a write, but this account is not authorized." if language == "en" else "Cette demande nécessite une écriture, mais ce compte n’est pas autorisé."
-                active["pending_write"] = None
-            else:
-                active["pending_write"] = {
-                    "message": message,
-                    "calls": [item.model_dump() for item in result.pending_confirmation],
-                    "history": recent_history,
-                }
-        else:
-            active["pending_write"] = None
-
+        active["pending_write"] = None
+        status = "success" if result.tool_results and all(item.ok for item in result.tool_results) else "failed"
+    else:
+        active["pending_write"] = None
+        active.pop("allow_session", None)
+        result, timeout_response = _safe_agent_call(lambda: agent.run(message, history=active.get("history", [])), "fr")
+        if timeout_response is not None:
+            return timeout_response
+        assert result is not None
+        answer = result.message
+        active["pending_write"] = {"message": message, "calls": [item.model_dump() for item in result.pending_confirmation]} if result.pending_confirmation else None
+        status = "pending" if result.pending_confirmation else "read_only"
     if not _generation_is_current(request, request_generation):
         response = JsonResponse({"error": "Contexte réinitialisé pendant la requête.", "reset": True}, status=409)
         response["Cache-Control"] = "no-store"
         return response
-
     if len(active.get("history", [])) == 0:
         active["title"] = message[:36] + ("…" if len(message) > 36 else "")
     _append_history(active, "user", message)
     _append_history(active, "assistant", answer)
     _save_state(request, state)
-    return JsonResponse({**_state_payload(state), "message": answer, "conversation_id": active["id"], "execution_status": execution_status})
+    return JsonResponse({**_state_payload(state), "message": answer, "conversation_id": active["id"], "execution_status": status})
 
 
 @login_required

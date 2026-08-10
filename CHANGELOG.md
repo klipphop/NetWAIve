@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.0] - 2026-08-10
+
+### Added
+- External MCP HTTP client targeting `http://127.0.0.1:8002/mcp`.
+- Gatekeeper tool loop with immediate read-only execution and pending RW tool calls.
+- Explicit confirmation boundary for MCP create/update/delete operations.
+- Lightweight HTTP chat adapter and MCP-backed CLI.
+
+### Removed
+- v0.6 custom intent, resolver, router, and planner pipeline from the active package path.
+
 ## [0.6.4] - 2026-08-05
 
 ### Fixed

@@ -9,18 +9,32 @@ from .mcp_client import MCPClient
 from .models import AgentResponse, PendingToolCall, ToolResult
 
 
-SYSTEM_PROMPT = """You are NetWAIve v0.1.1, a NetBox MCP assistant.
+SYSTEM_PROMPT = """You are NetWAIve v0.1.2, a NetBox MCP assistant.
 
 READ requests (list, search, show, get, hello) use read-only MCP tools immediately and never create a pending write.
 
 For a write request, especially a multi-object or infrastructure request:
 1. Complete all required read lookups first.
-2. If a required Manufacturer, DeviceType, Site, VLAN group, or other prerequisite is missing, autonomously include its creation in the same workflow when the user's intent is to create the complete object.
-3. Before any write confirmation, produce every write Tool Call needed for the complete request. Do not stop after the first object. Preserve dependency order and use observed IDs where required.
-4. The confirmation card is generated from the complete set of pending Tool Calls; never ask for blind confirmation.
+2. Before creating a Manufacturer or Device Type, MUST search NetBox broadly with the exact term, normalized partial terms, meaningful numeric/model tokens, and any aliases supplied by the user. Only propose creation after confirming no equivalent exists; never hardcode vendor-specific names or model rules.
+3. If a required prerequisite is missing, autonomously include its creation when the user's intent is to create the complete object.
+4. Produce every write Tool Call needed for the complete request before confirmation, preserving dependency order.
 5. Never claim a write succeeded before the user confirms and the MCP result is successful.
+
+The UI renders the confirmation plan in natural language. Do not put raw JSON, function calls, object_type, or argument dictionaries in user-facing text.
 Answer in the user's language.
 """
+
+OBJECT_LABELS = {
+    "dcim.site": "site",
+    "dcim.device": "device",
+    "dcim.devicetype": "Device Type",
+    "dcim.manufacturer": "Manufacturer",
+    "ipam.vlangroup": "VLAN Group",
+    "ipam.vlan": "VLAN",
+    "ipam.prefix": "préfixe",
+    "ipam.ipaddress": "adresse IP",
+    "virtualization.virtualmachine": "machine virtuelle",
+}
 
 
 class GatekeeperAgent:
@@ -72,11 +86,32 @@ class GatekeeperAgent:
     @staticmethod
     def _pending_message(calls: list[PendingToolCall]) -> str:
         lines = ["Plan complet en attente de confirmation :"]
-        for index, call in enumerate(calls, 1):
-            arguments = json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)
-            lines.append(f"{index}. {call.name}({arguments})")
+        for call in calls:
+            lines.append(f"• {GatekeeperAgent._describe_call(call)}")
         lines.append("Confirmez par Oui pour exécuter toutes les étapes dans cet ordre.")
         return "\n".join(lines)
+
+    @staticmethod
+    def _describe_call(call: PendingToolCall) -> str:
+        label = OBJECT_LABELS.get(call.arguments.get("object_type", ""), "objet NetBox")
+        action = call.name.rsplit("_", 2)[1] if call.name.startswith("netbox_") else "traiter"
+        data = call.arguments.get("data") or {}
+        if action == "create":
+            name = data.get("name") or data.get("model") or data.get("address") or data.get("vid")
+            details = []
+            if data.get("slug"):
+                details.append(f"slug: {data['slug']}")
+            if data.get("vid") is not None:
+                details.append(f"VID: {data['vid']}")
+            subject = f" : {name}" if name is not None else ""
+            suffix = f" ({', '.join(details)})" if details else ""
+            return f"Créer le {label}{subject}{suffix}"
+        identifier = call.arguments.get("object_id", "identifiant inconnu")
+        if action == "delete":
+            return f"Supprimer le {label} (ID : {identifier})"
+        changed = data.get("name") or data.get("model") or data.get("description")
+        suffix = f" : {changed}" if changed is not None else ""
+        return f"Modifier le {label} (ID : {identifier}){suffix}"
 
     def confirm(self, calls: list[PendingToolCall]) -> AgentResponse:
         results: list[ToolResult] = []

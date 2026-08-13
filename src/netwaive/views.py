@@ -166,6 +166,8 @@ def _can_write(user) -> bool:
 
 def _append_history(session: dict[str, Any], role: str, text: str) -> None:
     history = session.setdefault("history", [])
+    if history and history[-1].get("role") == role and history[-1].get("text") == text:
+        return
     history.append({"role": role, "text": text})
     session["history"] = history[-MAX_HISTORY:]
 
@@ -174,7 +176,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.1.3", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.1.4", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -230,7 +232,7 @@ def chat_api(request):
     agent = build_agent(_agent_settings())
     if pending and bool(body.get("approve_pending")):
         calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
-        result, timeout_response = _safe_agent_call(lambda: agent.confirm(calls), "fr")
+        result, timeout_response = _safe_agent_call(lambda: agent.confirm(calls, message=str(pending.get("message") or ""), history=active.get("history", [])), "fr")
         if timeout_response is not None:
             return timeout_response
         assert result is not None
@@ -256,7 +258,7 @@ def chat_api(request):
     _append_history(active, "user", message)
     _append_history(active, "assistant", answer)
     _save_state(request, state)
-    return JsonResponse({**_state_payload(state), "message": answer, "conversation_id": active["id"], "execution_status": status})
+    return JsonResponse({**_state_payload(state), "message": answer, "quick_replies": result.quick_replies, "conversation_id": active["id"], "execution_status": status})
 
 
 @login_required

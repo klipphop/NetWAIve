@@ -156,3 +156,4 @@ class AgentResponse(BaseModel):
     message: str
     pending_confirmation: list[PendingToolCall] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
+    quick_replies: list[str] = Field(default_factory=list)

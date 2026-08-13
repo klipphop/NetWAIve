@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.3] - 2026-08-13
+## [0.1.4] - 2026-08-13
+
+### Added
+- Single-approval ReAct continuation after the first confirmed write result.
+- Quick-reply metadata for clarification questions.
+- Server-side history deduplication for repeated assistant messages.
+
 
 ### Added
 - Contextual cross-referencing for ambiguous terms using user context and NetBox observations.

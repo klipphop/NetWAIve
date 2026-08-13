@@ -9,6 +9,20 @@ from .mcp_client import MCPClient
 from .models import AgentResponse, PendingToolCall, ToolResult
 
 
+SYSTEM_PROMPT = """You are NetWAIve v0.1.1, a NetBox MCP assistant.
+
+READ requests (list, search, show, get, hello) use read-only MCP tools immediately and never create a pending write.
+
+For a write request, especially a multi-object or infrastructure request:
+1. Complete all required read lookups first.
+2. If a required Manufacturer, DeviceType, Site, VLAN group, or other prerequisite is missing, autonomously include its creation in the same workflow when the user's intent is to create the complete object.
+3. Before any write confirmation, produce every write Tool Call needed for the complete request. Do not stop after the first object. Preserve dependency order and use observed IDs where required.
+4. The confirmation card is generated from the complete set of pending Tool Calls; never ask for blind confirmation.
+5. Never claim a write succeeded before the user confirms and the MCP result is successful.
+Answer in the user's language.
+"""
+
+
 class GatekeeperAgent:
     """Thin LLM/MCP adapter: RO executes, RW waits for explicit confirmation."""
 
@@ -24,7 +38,7 @@ class GatekeeperAgent:
         return any(word in name.casefold() for word in ("create", "update", "delete"))
 
     def run(self, message: str, history: list[dict[str, Any]] | None = None) -> AgentResponse:
-        messages: list[dict[str, Any]] = [{"role": "system", "content": "You are a NetBox assistant. Use MCP tools. Read tools execute immediately. Never claim a write succeeded before it is confirmed. Answer in the user's language."}]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for item in (history or [])[-16:]:
             if item.get("role") in {"user", "assistant"}:
                 messages.append({"role": item["role"], "content": str(item.get("content") or item.get("text") or "")})
@@ -52,8 +66,17 @@ class GatekeeperAgent:
                 results.append(result)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
             if pending:
-                return AgentResponse(message="Opération(s) d’écriture en attente de confirmation.", pending_confirmation=pending, tool_results=results)
+                return AgentResponse(message=self._pending_message(pending), pending_confirmation=pending, tool_results=results)
         raise RuntimeError("LLM tool loop exceeded max_turns")
+
+    @staticmethod
+    def _pending_message(calls: list[PendingToolCall]) -> str:
+        lines = ["Plan complet en attente de confirmation :"]
+        for index, call in enumerate(calls, 1):
+            arguments = json.dumps(call.arguments, ensure_ascii=False, sort_keys=True)
+            lines.append(f"{index}. {call.name}({arguments})")
+        lines.append("Confirmez par Oui pour exécuter toutes les étapes dans cet ordre.")
+        return "\n".join(lines)
 
     def confirm(self, calls: list[PendingToolCall]) -> AgentResponse:
         results: list[ToolResult] = []

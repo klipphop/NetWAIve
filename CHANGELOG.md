@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.5] - 2026-08-13
+## [0.1.6] - 2026-08-14
+
+### Added
+- Per-browser-tab session IDs propagated through the HTTP API.
+- Choice-field guidance based on MCP schemas and validation feedback.
+- Proactive architecture/advice behavior and name-to-ID resolution guidance.
+- Context purge and stale-history protection across tabs.
+
 
 ### Fixed
 - Preserve exact NetBox validation response bodies for MCP create/update/delete failures.

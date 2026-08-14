@@ -176,7 +176,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.1.5", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.1.6", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -199,6 +199,11 @@ def health_api(request):
 @require_GET
 def history_api(request):
     state = _load_state(request)
+    tab_id = str(request.GET.get("tab_id") or "")
+    if tab_id:
+        active_id = state.setdefault("tab_sessions", {}).get(tab_id)
+        if active_id:
+            _active_session(state, active_id)
     _save_state(request, state)
     return JsonResponse(_state_payload(state))
 
@@ -227,7 +232,9 @@ def chat_api(request):
         return JsonResponse({"error": "Message vide."}, status=400)
     state = _load_state(request)
     request_generation = state["generation"]
-    active = _active_session(state, str(body.get("conversation_id") or "") or None)
+    tab_id = str(body.get("tab_id") or "")
+    requested_conversation = str(body.get("conversation_id") or "") or state.setdefault("tab_sessions", {}).get(tab_id)
+    active = _active_session(state, requested_conversation or None)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
     agent = build_agent(_agent_settings())
     if pending and bool(body.get("approve_pending")):
@@ -264,11 +271,19 @@ def chat_api(request):
 @login_required
 @require_POST
 def session_new_api(request):
+    body = json.loads(request.body or b"{}")
     state = _load_state(request)
+    tab_id = str(body.get("tab_id") or "")
+    if tab_id and state.setdefault("tab_sessions", {}).get(tab_id):
+        state["active_session_id"] = state["tab_sessions"][tab_id]
+        _save_state(request, state)
+        return JsonResponse(_state_payload(state))
     new_session = {"id": str(uuid.uuid4()), "title": f"Session {len(state['sessions']) + 1}", "history": [], "pending_write": None, "allow_session": False}
     state["sessions"].append(new_session)
     state["sessions"] = state["sessions"][-MAX_SESSIONS:]
     state["active_session_id"] = new_session["id"]
+    if tab_id:
+        state.setdefault("tab_sessions", {})[tab_id] = new_session["id"]
     _save_state(request, state)
     return JsonResponse(_state_payload(state))
 

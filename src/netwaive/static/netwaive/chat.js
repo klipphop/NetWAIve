@@ -8,6 +8,12 @@
   let pendingWrite = null;
   let resetEpoch = 0;
   let activeChatController = null;
+  const TAB_KEY = "netwaive-tab-id-v1";
+  const tabId = (() => {
+    let value = sessionStorage.getItem(TAB_KEY);
+    if (!value) { value = crypto.randomUUID(); sessionStorage.setItem(TAB_KEY, value); }
+    return value;
+  })();
 
   const renderMarkdown = (text) => {
     const esc = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
@@ -107,7 +113,7 @@
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, conversation_id: conversationId, approve_pending: approvePending }),
+        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending }),
         signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
@@ -160,7 +166,7 @@
   });
 
   const historyEpoch = resetEpoch;
-  fetch("/plugins/netwaive/api/history/", { credentials: "same-origin" })
+  fetch("/plugins/netwaive/api/history/" + "?tab_id=" + encodeURIComponent(tabId), { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => {
       if (historyEpoch !== resetEpoch) return;
@@ -197,7 +203,7 @@
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, conversation_id: conversationId }),
+        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId }),
         signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";

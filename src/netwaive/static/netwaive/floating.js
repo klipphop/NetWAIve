@@ -31,6 +31,12 @@
       layout: "floating",
       ui: { open: true, layout: "docked", width: 320 },
     };
+    const TAB_KEY = "netwaive-tab-id-v1";
+    const tabId = (() => {
+      let value = sessionStorage.getItem(TAB_KEY);
+      if (!value) { value = crypto.randomUUID(); sessionStorage.setItem(TAB_KEY, value); }
+      return value;
+    })();
     let resetEpoch = 0;
     let activeChatController = null;
 
@@ -247,7 +253,7 @@
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, conversation_id: state.activeSessionId, approve_pending: approvePending, approval_scope: approvalScope }),
+          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, approve_pending: approvePending, approval_scope: approvalScope }),
           signal: controller.signal,
         });
         const contentType = response.headers.get("content-type") || "";
@@ -330,7 +336,7 @@
 
     async function loadState() {
       const epoch = resetEpoch;
-      const r = await fetch(api.history, { credentials: "same-origin" });
+      const r = await fetch("/plugins/netwaive/api/history/" + "?tab_id=" + encodeURIComponent(tabId), { credentials: "same-origin" });
       const data = await r.json();
       if (epoch !== resetEpoch) return state.ui;
       state.sessions = data.sessions || [];
@@ -344,7 +350,7 @@
     }
 
     async function createSession() {
-      const r = await fetch(api.newSession, { method: "POST", headers: { "X-CSRFToken": csrf() } });
+      const r = await fetch(api.newSession, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() }, body: JSON.stringify({ tab_id: tabId }) });
       const data = await r.json();
       state.sessions = data.sessions || state.sessions;
       state.activeSessionId = data.active_session_id || data.session?.id || state.activeSessionId;
@@ -523,7 +529,7 @@
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, conversation_id: state.activeSessionId }),
+          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId }),
           signal: controller.signal,
         });
         const contentType = response.headers.get("content-type") || "";

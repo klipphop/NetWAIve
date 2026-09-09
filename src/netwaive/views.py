@@ -291,6 +291,15 @@ def chat_api(request):
     message = str(body.get("message") or "").strip()
     if not message:
         return JsonResponse({"error": "Message vide."}, status=400)
+    context = body.get("context") if isinstance(body.get("context"), dict) else {}
+    safe_context = {
+        "path": str(context.get("path") or "")[:500],
+        "title": str(context.get("title") or "")[:200],
+        "object": context.get("object") if isinstance(context.get("object"), dict) else None,
+    }
+    agent_message = message
+    if safe_context["path"]:
+        agent_message = f"{message}\n\n[Contexte NetBox courant: {json.dumps(safe_context, ensure_ascii=False)}]"
     state = _load_state(request)
     request_generation = state["generation"]
     tab_id = _valid_tab_id(body.get("tab_id"))
@@ -320,7 +329,7 @@ def chat_api(request):
         active["pending_write"] = None
         active.pop("allow_session", None)
         agent = build_agent(_agent_settings())
-        result, timeout_response = _safe_agent_call(lambda: agent.run(message, history=active.get("history", [])), "fr")
+        result, timeout_response = _safe_agent_call(lambda: agent.run(agent_message, history=active.get("history", [])), "fr")
         if timeout_response is not None:
             return timeout_response
         assert result is not None

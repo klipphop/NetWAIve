@@ -15,6 +15,11 @@
     return value;
   })();
 
+  const pageContext = () => {
+    const match = location.pathname.match(/^\/(?:plugins\/)?([^/]+)\/([^/]+)\/(\d+)\/?/);
+    return { path: location.pathname.slice(0, 500), title: document.title.slice(0, 200), object: match ? { app: match[1], resource: match[2], id: Number(match[3]) } : null };
+  };
+
   const renderMarkdown = (text) => {
     const esc = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
     const inline = (value) => esc(value)
@@ -224,7 +229,7 @@
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId }),
+        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, context: pageContext() }),
         signal: activeChatController.signal,
       });
       const contentType = response.headers.get("content-type") || "";

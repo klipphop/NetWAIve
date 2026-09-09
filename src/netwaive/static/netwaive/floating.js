@@ -41,6 +41,11 @@
       ui: { open: true, layout: "docked", width: 320 },
     };
 
+    const pageContext = () => {
+      const match = location.pathname.match(/^\/(?:plugins\/)?([^/]+)\/([^/]+)\/(\d+)\/?/);
+      return { path: location.pathname.slice(0, 500), title: document.title.slice(0, 200), object: match ? { app: match[1], resource: match[2], id: Number(match[3]) } : null };
+    };
+
     const api = {
       history: "/plugins/netwaive/api/history/",
       newSession: "/plugins/netwaive/api/sessions/new/",
@@ -548,7 +553,7 @@
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId }),
+          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, context: pageContext() }),
           signal: activeChatController.signal,
         });
         const contentType = response.headers.get("content-type") || "";

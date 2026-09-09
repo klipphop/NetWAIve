@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from urllib.parse import unquote
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -18,13 +20,17 @@ class BatchOperation(BaseModel):
     @classmethod
     def normalize_endpoint(cls, value: str) -> str:
         value = value.strip()
-        if not value or value.startswith(("http://", "https://")):
+        decoded = unquote(value)
+        if not value or decoded.lower().startswith(("http://", "https://")):
             raise ValueError("endpoint must be a relative NetBox API path")
         value = "/" + value.strip("/") + "/"
         if value.startswith("/api/"):
             value = value[4:]
-        if value == "/" or ".." in value or "?" in value or "#" in value:
+        decoded_path = unquote(value).lower()
+        if value == "/" or ".." in decoded_path or "?" in value or "#" in value or "%" in value:
             raise ValueError("endpoint contains an unsafe path")
+        if decoded_path.startswith(("/users/", "/admin/", "/auth/")):
+            raise ValueError("endpoint is outside the NetBox infrastructure scope")
         return value
 
 

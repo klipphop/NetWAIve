@@ -76,7 +76,7 @@ def test_inflight_chat_cannot_restore_state_after_reset(monkeypatch):
         def __getitem__(self, key): return self.headers[key]
 
     request = dirty_request()
-    request.body = json.dumps({"message":"requête lente"}).encode()
+    request.body = json.dumps({"message":"requête lente", "tab_id": "11111111-1111-4111-8111-111111111111"}).encode()
     request.user = SimpleNamespace()
 
     class Agent:
@@ -119,7 +119,7 @@ def test_chat_converts_upstream_504_html_to_clean_json(monkeypatch):
             raise GatewayTimeout("<html><h1>504 Gateway Time-out</h1></html>")
 
     request = dirty_request()
-    request.body = json.dumps({"message": "Crée un site"}).encode()
+    request.body = json.dumps({"message": "Crée un site", "tab_id": "22222222-2222-4222-8222-222222222222"}).encode()
     request.user = SimpleNamespace()
     monkeypatch.setattr(views, "JsonResponse", Response)
     monkeypatch.setattr(views, "build_agent", lambda settings: Agent(settings))
@@ -184,7 +184,7 @@ def test_new_request_invalidates_previous_pending_and_session_write_scope(monkey
     active["pending_write"] = {"message": "Power Strip", "calls": []}
     active["allow_session"] = True
     views._save_state(request, state)
-    request.body = json.dumps({"message": "Crée un Catalyst"}).encode()
+    request.body = json.dumps({"message": "Crée un Catalyst", "tab_id": "33333333-3333-4333-8333-333333333333"}).encode()
     request.user = SimpleNamespace(is_superuser=False, groups=SimpleNamespace(filter=lambda **kwargs: []))
 
     class Agent:

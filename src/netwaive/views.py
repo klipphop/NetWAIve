@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -145,6 +146,43 @@ def _active_session(state: dict[str, Any], requested_id: str | None = None) -> d
     return session
 
 
+def _valid_tab_id(value: Any) -> str:
+    try:
+        return str(uuid.UUID(str(value or "")))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("tab_id invalide")
+
+
+def _plan_id(plan: ChangePlan) -> str:
+    raw = json.dumps(plan.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _redact(value: Any, key: str = "") -> Any:
+    sensitive = {"token", "password", "secret", "api_key", "private_key", "credential"}
+    if any(part in key.casefold() for part in sensitive):
+        return "***"
+    if isinstance(value, dict):
+        return {item_key: _redact(item_value, item_key) for item_key, item_value in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
+
+
+def _public_plan(plan: ChangePlan) -> dict[str, Any]:
+    return {
+        "id": _plan_id(plan),
+        "summary": plan.summary,
+        "risk": plan.risk,
+        "affected_objects": plan.affected_objects,
+        "dependencies": plan.dependencies,
+        "operations": [
+            {"index": index + 1, "method": item.method, "endpoint": item.endpoint, "data": _redact(item.data)}
+            for index, item in enumerate(plan.operations)
+        ],
+    }
+
+
 def _session_for_tab(state: dict[str, Any], tab_id: str | None) -> dict[str, Any]:
     """Return a session isolated to one browser tab, creating it on first use."""
     tab_id = str(tab_id or "").strip()
@@ -167,7 +205,12 @@ def _session_for_tab(state: dict[str, Any], tab_id: str | None) -> dict[str, Any
 def _state_payload(state: dict[str, Any]) -> dict[str, Any]:
     active = _active_session(state)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
-    public_pending = {"message": pending.get("message"), "change_plan": pending.get("change_plan"), "calls": pending.get("calls", [])} if pending else None
+    public_pending = None
+    if pending and isinstance(pending.get("change_plan"), dict):
+        try:
+            public_pending = {"message": pending.get("message"), "change_plan": _public_plan(ChangePlan.model_validate(pending["change_plan"]))}
+        except Exception:
+            public_pending = None
     return {
         "sessions": [{"id": item["id"], "title": item.get("title", "Session")} for item in state["sessions"]],
         "active_session_id": active["id"],
@@ -211,8 +254,9 @@ def health_api(request):
             "pynetbox_ready": True,
             "write_enabled": _can_write(request.user),
         })
-    except Exception as exc:
-        return JsonResponse({"configured": False, "error": str(exc), "pynetbox_ready": False})
+    except Exception:
+        logger.exception("netwaive health check failed")
+        return JsonResponse({"configured": False, "error": "Configuration NetWAIve indisponible.", "code": "not_configured", "pynetbox_ready": False}, status=503)
 
 
 @login_required
@@ -222,7 +266,7 @@ def history_api(request):
     state = _load_state(request)
     active = _session_for_tab(state, tab_id)
     _save_state(request, state)
-    return JsonResponse({**_state_payload(state), "active_session_id": active["id"], "history": active.get("history", []), "pending_write": active.get("pending_write")})
+    return JsonResponse({**_state_payload(state), "active_session_id": active["id"], "history": active.get("history", [])})
 
 
 def _json_errors(view):
@@ -231,8 +275,8 @@ def _json_errors(view):
         try:
             return view(request, *args, **kwargs)
         except Exception:
-            logger.exception("netwaive chat request failed", extra={"path": request.path, "method": request.method})
-            return JsonResponse({"error": "Erreur interne NetWAIve."}, status=400)
+            logger.exception("netwaive API failure", extra={"path": request.path, "method": request.method})
+            return JsonResponse({"error": "Erreur interne NetWAIve.", "code": "internal_error"}, status=500)
     return wrapped
 
 
@@ -249,16 +293,22 @@ def chat_api(request):
         return JsonResponse({"error": "Message vide."}, status=400)
     state = _load_state(request)
     request_generation = state["generation"]
-    tab_id = str(body.get("tab_id") or "")
+    tab_id = _valid_tab_id(body.get("tab_id"))
     active = _session_for_tab(state, tab_id)
     requested_conversation = str(body.get("conversation_id") or "")
+    if requested_conversation and requested_conversation != active["id"]:
+        return JsonResponse({"error": "Conversation ou onglet périmé.", "code": "stale_conversation"}, status=409)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
-    agent = build_agent(_agent_settings())
     if pending and bool(body.get("approve_pending")):
+        if not _can_write(request.user):
+            return JsonResponse({"error": "Écriture NetBox non autorisée.", "code": "write_forbidden"}, status=403)
         raw_plan = pending.get("change_plan")
         if not isinstance(raw_plan, dict):
             return JsonResponse({"error": "Change Plan absent ou invalide."}, status=409)
         plan = ChangePlan.model_validate(raw_plan)
+        if str(body.get("plan_id") or "") != _plan_id(plan):
+            return JsonResponse({"error": "Change Plan périmé ou modifié.", "code": "stale_plan"}, status=409)
+        agent = build_agent(_agent_settings())
         result, timeout_response = _safe_agent_call(lambda: agent.confirm(plan), "fr")
         if timeout_response is not None:
             return timeout_response
@@ -269,6 +319,7 @@ def chat_api(request):
     else:
         active["pending_write"] = None
         active.pop("allow_session", None)
+        agent = build_agent(_agent_settings())
         result, timeout_response = _safe_agent_call(lambda: agent.run(message, history=active.get("history", [])), "fr")
         if timeout_response is not None:
             return timeout_response
@@ -289,6 +340,21 @@ def chat_api(request):
     _append_history(active, "assistant", answer)
     _save_state(request, state)
     return JsonResponse({**_state_payload(state), "message": answer, "quick_replies": result.quick_replies, "conversation_id": active["id"], "execution_status": status})
+
+
+@login_required
+@require_POST
+@_json_errors
+def cancel_pending_api(request):
+    body = json.loads(request.body or b"{}")
+    tab_id = _valid_tab_id(body.get("tab_id"))
+    state = _load_state(request)
+    active = _session_for_tab(state, tab_id)
+    if str(body.get("conversation_id") or "") != active["id"]:
+        return JsonResponse({"error": "Conversation ou onglet périmé.", "code": "stale_conversation"}, status=409)
+    active["pending_write"] = None
+    _save_state(request, state)
+    return JsonResponse({**_state_payload(state), "message": "Change Plan annulé.", "conversation_id": active["id"], "execution_status": "cancelled"})
 
 
 @login_required

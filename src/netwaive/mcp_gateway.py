@@ -52,4 +52,8 @@ class MCPGateway:
         if not self.session_id:
             self.initialize()
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
-        return result.get("content", result)
+        if result.get("isError") or result.get("is_error"):
+            content = result.get("content", [])
+            detail = "; ".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in content)
+            raise RuntimeError(detail or f"MCP tool {name} failed")
+        return result.get("structuredContent", result.get("content", result))

@@ -25,6 +25,9 @@
       return value;
     })();
 
+    let resetEpoch = 0;
+    let activeChatController = null;
+
     const LAYOUT_KEY = "netwaive-layout-v1";
     const OPEN_KEY = "netwaive-open-v1";
     const csrf = () => document.cookie.split(";").map(x => x.trim()).find(x => x.startsWith("csrftoken="))?.split("=").slice(1).join("=") || form.querySelector("input[name=csrfmiddlewaretoken]")?.value || "";
@@ -44,6 +47,7 @@
       selectSession: "/plugins/netwaive/api/sessions/select/",
       deleteSession: "/plugins/netwaive/api/sessions/delete/",
       reset: "/plugins/netwaive/api/reset/",
+      cancelPending: "/plugins/netwaive/api/pending/cancel/",
       chat: "/plugins/netwaive/api/chat/",
       health: "/plugins/netwaive/api/health/",
       ui: "/plugins/netwaive/api/ui/",
@@ -227,7 +231,26 @@
 
     function renderPendingControls() {
       messages.querySelector("#netwaive-confirm-wrap")?.remove();
+      messages.querySelector("#netwaive-plan-card")?.remove();
       if (!state.pendingWrite) return;
+      const plan = state.pendingWrite.change_plan;
+      if (plan) {
+        const card = document.createElement("div");
+        card.id = "netwaive-plan-card";
+        card.className = "alert alert-warning mt-2 text-start";
+        const title = document.createElement("strong");
+        title.textContent = `${plan.summary || "Change Plan"} · risque ${plan.risk || "medium"}`;
+        card.appendChild(title);
+        const list = document.createElement("ol");
+        (plan.operations || []).forEach((operation) => {
+          const item = document.createElement("li");
+          const identity = operation.data?.name || operation.data?.model || operation.data?.prefix || operation.data?.address || `opération ${operation.index}`;
+          item.textContent = `${operation.method} ${operation.endpoint} — ${identity}`;
+          list.appendChild(item);
+        });
+        card.appendChild(list);
+        messages.appendChild(card);
+      }
       const wrap = document.createElement("div");
       wrap.id = "netwaive-confirm-wrap";
       wrap.className = "d-flex gap-2 mt-2 justify-content-end";
@@ -244,7 +267,7 @@
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, approve_pending: approvePending }),
+          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, approve_pending: approvePending, plan_id: approvePending ? state.pendingWrite?.change_plan?.id : undefined }),
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
@@ -265,7 +288,18 @@
       });
       no.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
-        try { await sendQuick("non"); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
+        try {
+          const response = await fetch(api.cancelPending, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
+            body: JSON.stringify({ tab_id: tabId, conversation_id: state.activeSessionId }),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Annulation impossible");
+          state.pendingWrite = null;
+          state.history = data.history || state.history;
+          renderConversation();
+        } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
       });
       wrap.appendChild(yes);
@@ -507,15 +541,20 @@
       addMessage("user", message);
       const button = form.querySelector("button[type='submit']");
       button.disabled = true;
+      const epoch = resetEpoch;
+      activeChatController?.abort();
+      activeChatController = new AbortController();
       try {
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
           body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId }),
+          signal: activeChatController.signal,
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
         const data = await response.json();
+        if (epoch !== resetEpoch) return;
         if (!response.ok) throw new Error(data.error || "Erreur LLM");
         state.sessions = data.sessions || state.sessions;
         state.activeSessionId = data.active_session_id || state.activeSessionId;

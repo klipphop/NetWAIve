@@ -20,8 +20,12 @@ class GatekeeperAgent:
 
     @staticmethod
     def _openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        hidden = {"netbox_create_object", "netbox_update_object", "netbox_delete_object"}
-        return [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}} for t in tools if t.get("name") not in hidden]
+        allowed = {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_batch_execute"}
+        return [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}} for t in tools if t.get("name") in allowed]
+
+    @staticmethod
+    def _is_allowed_read(name: str) -> bool:
+        return name in {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference"}
 
     @staticmethod
     def _batch(args: dict[str, Any]) -> ChangePlan:
@@ -73,9 +77,14 @@ class GatekeeperAgent:
                         observations.append(result)
                         messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
                         continue
+                if not self._is_allowed_read(call.function.name):
+                    result = ToolResult(ok=False, message=f"Outil MCP non autorisé : {call.function.name}")
+                    observations.append(result)
+                    messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
+                    continue
                 try:
                     data = self.mcp.call(call.function.name, args)
-                    inspected |= call.function.name in {"netbox_inspect_tree", "netbox_get_objects", "netbox_search_objects", "netbox_get_object_by_id"}
+                    inspected = True
                     result = ToolResult(ok=True, message="MCP read completed", data=data)
                 except Exception as exc:
                     result = ToolResult(ok=False, message=f"MCP read failed: {exc}")

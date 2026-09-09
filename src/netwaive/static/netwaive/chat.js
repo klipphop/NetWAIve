@@ -6,6 +6,8 @@
   const clearButton = document.getElementById("netwaive-clear");
   let conversationId = null;
   let pendingWrite = null;
+  let resetEpoch = 0;
+  let activeChatController = null;
   const TAB_KEY = "netwaive-tab-id-v1";
   const tabId = (() => {
     let value = sessionStorage.getItem(TAB_KEY);
@@ -88,7 +90,27 @@
 
   const renderPendingControls = () => {
     document.getElementById("netwaive-confirm-wrap")?.remove();
+    document.getElementById("netwaive-plan-card")?.remove();
     if (!pendingWrite) return;
+    const plan = pendingWrite.change_plan;
+    if (plan) {
+      const card = document.createElement("div");
+      card.id = "netwaive-plan-card";
+      card.className = "alert alert-warning mt-2 text-start";
+      const title = document.createElement("strong");
+      title.textContent = `${plan.summary || "Change Plan"} · risque ${plan.risk || "medium"}`;
+      card.appendChild(title);
+      const list = document.createElement("ol");
+      (plan.operations || []).forEach((operation) => {
+        const item = document.createElement("li");
+        const identity = operation.data?.name || operation.data?.model || operation.data?.prefix || operation.data?.address || `opération ${operation.index}`;
+        item.textContent = `${operation.method} ${operation.endpoint} — ${identity}`;
+        list.appendChild(item);
+      });
+      card.appendChild(list);
+      messages.appendChild(card);
+    }
+
     const wrap = document.createElement("div");
     wrap.id = "netwaive-confirm-wrap";
     wrap.className = "d-flex gap-2 mt-2 justify-content-end";
@@ -108,7 +130,7 @@
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending }),
+        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending, plan_id: approvePending ? pendingWrite?.change_plan?.id : undefined }),
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
@@ -127,7 +149,18 @@
     });
     no.addEventListener("click", async () => {
       yes.disabled = true; no.disabled = true;
-      try { await sendQuick("non"); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
+      try {
+        const response = await fetch("/plugins/netwaive/api/pending/cancel/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
+          body: JSON.stringify({ tab_id: tabId, conversation_id: conversationId }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Annulation impossible");
+        pendingWrite = null;
+        add("assistant", data.message);
+        renderPendingControls();
+      } catch (error) { add("assistant", `Erreur : ${error.message}`); }
       finally { yes.disabled = false; no.disabled = false; }
     });
 
@@ -184,15 +217,20 @@
     add("user", message);
     const button = form.querySelector("button");
     button.disabled = true;
+    const epoch = resetEpoch;
+    activeChatController?.abort();
+    activeChatController = new AbortController();
     try {
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
         body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId }),
+        signal: activeChatController.signal,
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
       const data = await response.json();
+      if (epoch !== resetEpoch) return;
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;

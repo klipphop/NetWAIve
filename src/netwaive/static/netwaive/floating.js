@@ -16,9 +16,15 @@
     const input = widget.querySelector(".netwaive-drawer-input");
     const messages = widget.querySelector(".netwaive-drawer-messages");
     const status = widget.querySelector(".netwaive-drawer-status");
-    const banner = widget.querySelector("[data-netwaive-banner]")?.dataset.netwaiveBanner || "Assistant NetBox (Beta)";
 
     const POS_KEY = "netwaive-window-pos-v3";
+    const TAB_KEY = "netwaive-tab-id-v1";
+    const tabId = (() => {
+      let value = sessionStorage.getItem(TAB_KEY);
+      if (!value) { value = crypto.randomUUID(); sessionStorage.setItem(TAB_KEY, value); }
+      return value;
+    })();
+
     const LAYOUT_KEY = "netwaive-layout-v1";
     const OPEN_KEY = "netwaive-open-v1";
     const csrf = () => document.cookie.split(";").map(x => x.trim()).find(x => x.startsWith("csrftoken="))?.split("=").slice(1).join("=") || form.querySelector("input[name=csrfmiddlewaretoken]")?.value || "";
@@ -31,14 +37,6 @@
       layout: "floating",
       ui: { open: true, layout: "docked", width: 320 },
     };
-    const TAB_KEY = "netwaive-tab-id-v1";
-    const tabId = (() => {
-      let value = sessionStorage.getItem(TAB_KEY);
-      if (!value) { value = crypto.randomUUID(); sessionStorage.setItem(TAB_KEY, value); }
-      return value;
-    })();
-    let resetEpoch = 0;
-    let activeChatController = null;
 
     const api = {
       history: "/plugins/netwaive/api/history/",
@@ -85,7 +83,7 @@
       void fetch(api.ui, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-        body: JSON.stringify(state.ui),
+        body: JSON.stringify({ ...state.ui, tab_id: tabId }),
       }).catch(() => {});
     }
 
@@ -221,7 +219,7 @@
       messages.replaceChildren();
       const intro = document.createElement("div");
       intro.className = "netwaive-intro";
-      intro.textContent = banner;
+      intro.textContent = "Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.";
       messages.appendChild(intro);
       state.history.forEach(item => addMessage(item.role, item.text));
       renderPendingControls();
@@ -236,30 +234,21 @@
       const yes = document.createElement("button");
       yes.type = "button";
       yes.className = "btn btn-sm btn-success";
-      yes.textContent = "Allow Once";
-      const allowSession = document.createElement("button");
-      allowSession.type = "button";
-      allowSession.className = "btn btn-sm btn-outline-success";
-      allowSession.textContent = "Allow Session";
+      yes.textContent = "Confirmer";
       const no = document.createElement("button");
       no.type = "button";
       no.className = "btn btn-sm btn-outline-danger";
-      no.textContent = "Deny";
-      const sendQuick = async (message, approvePending = false, approvalScope = "once") => {
+      no.textContent = "Annuler";
+      const sendQuick = async (message, approvePending = false) => {
         addMessage("user", message);
-        const epoch = resetEpoch;
-        const controller = new AbortController();
-        activeChatController = controller;
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, approve_pending: approvePending, approval_scope: approvalScope }),
-          signal: controller.signal,
+          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, approve_pending: approvePending }),
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
         const data = await response.json();
-        if (epoch !== resetEpoch) return;
         if (!response.ok) throw new Error(data.error || "Erreur LLM");
         state.sessions = data.sessions || state.sessions;
         state.activeSessionId = data.active_session_id || state.activeSessionId;
@@ -271,21 +260,15 @@
       };
       yes.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
-        try { await sendQuick("oui", true); } catch (error) { if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`); }
+        try { await sendQuick("oui", true); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
-      });
-      allowSession.addEventListener("click", async () => {
-        yes.disabled = true; allowSession.disabled = true; no.disabled = true;
-        try { await sendQuick("allow session", true, "session"); } catch (error) { if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`); }
-        finally { yes.disabled = false; allowSession.disabled = false; no.disabled = false; }
       });
       no.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
-        try { await sendQuick("non"); } catch (error) { if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`); }
+        try { await sendQuick("non"); } catch (error) { addMessage("assistant", `Erreur : ${error.message}`); }
         finally { yes.disabled = false; no.disabled = false; }
       });
       wrap.appendChild(yes);
-      wrap.appendChild(allowSession);
       wrap.appendChild(no);
       messages.appendChild(wrap);
       messages.scrollTop = messages.scrollHeight;
@@ -335,10 +318,8 @@
     }
 
     async function loadState() {
-      const epoch = resetEpoch;
-      const r = await fetch("/plugins/netwaive/api/history/" + "?tab_id=" + encodeURIComponent(tabId), { credentials: "same-origin" });
+      const r = await fetch(api.history + "?tab_id=" + encodeURIComponent(tabId), { credentials: "same-origin" });
       const data = await r.json();
-      if (epoch !== resetEpoch) return state.ui;
       state.sessions = data.sessions || [];
       state.activeSessionId = data.active_session_id || null;
       state.history = data.history || [];
@@ -367,7 +348,7 @@
       const r = await fetch(api.selectSession, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify({ tab_id: tabId, session_id: sessionId }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "Impossible de sélectionner la session");
@@ -384,7 +365,7 @@
       const r = await fetch(api.deleteSession, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify({ tab_id: tabId, session_id: sessionId }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || "Impossible de supprimer la session");
@@ -398,27 +379,31 @@
     }
 
     clearBtn?.addEventListener("click", async (event) => {
-      event.stopPropagation();
       resetEpoch += 1;
       activeChatController?.abort();
       activeChatController = null;
+      event.stopPropagation();
+      state.history = [];
+      state.pendingWrite = null;
+      saveUi({ open: true, layout: state.layout });
       try {
         const r = await fetch(api.reset, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "X-CSRFToken": csrf(), "Cache-Control": "no-store" },
-          body: JSON.stringify({}),
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
+          body: JSON.stringify({ tab_id: tabId, session_id: state.activeSessionId }),
         });
         const data = await r.json();
-        if (!r.ok) throw new Error(data.error || "Reset impossible");
-        state.sessions = data.sessions || [];
-        state.activeSessionId = data.active_session_id || null;
+        if (!r.ok) throw new Error(data.error || "Impossible d'effacer la session");
+        state.sessions = data.sessions || state.sessions;
+        state.activeSessionId = data.active_session_id || state.activeSessionId;
         state.history = data.history || [];
-        state.pendingWrite = data.pending_write || null;
+        state.pendingWrite = null;
         state.ui = { ...state.ui, ...(data.ui || {}) };
         renderTabs();
         renderConversation();
       } catch (error) {
-        addMessage("assistant", `Erreur reset : ${error.message}`);
+        state.history = [];
+        renderConversation();
       }
     });
 
@@ -522,20 +507,15 @@
       addMessage("user", message);
       const button = form.querySelector("button[type='submit']");
       button.disabled = true;
-      const epoch = resetEpoch;
-      const controller = new AbortController();
-      activeChatController = controller;
       try {
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
           body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId }),
-          signal: controller.signal,
         });
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
         const data = await response.json();
-        if (epoch !== resetEpoch) return;
         if (!response.ok) throw new Error(data.error || "Erreur LLM");
         state.sessions = data.sessions || state.sessions;
         state.activeSessionId = data.active_session_id || state.activeSessionId;
@@ -545,7 +525,7 @@
         renderTabs();
         renderConversation();
       } catch (error) {
-        if (error.name !== "AbortError") addMessage("assistant", `Erreur : ${error.message}`);
+        addMessage("assistant", `Erreur : ${error.message}`);
       } finally {
         button.disabled = false;
         input.focus();

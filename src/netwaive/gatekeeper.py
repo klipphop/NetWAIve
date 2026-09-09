@@ -7,29 +7,10 @@ from typing import Any
 from openai import OpenAI
 
 from .mcp_client import MCPClient
+from .contracts import ChangePlan
 from .models import AgentResponse, PendingToolCall, ToolResult
+from .prompt import SYSTEM_PROMPT
 
-
-SYSTEM_PROMPT = """You are NetWAIve v0.1.6, a NetBox MCP assistant.
-
-READ requests (list, search, show, get, hello) use read-only MCP tools immediately and never create a pending write.
-
-For NetBox choice fields, inspect the MCP tool schema and validation responses for allowed enum slugs. Map the user's natural wording to those observed slugs without hardcoded vendor rules. If the choice is uncertain, present the valid choices in readable language and ask one concise question.
-Never ask the user for a numeric ID. Resolve names to IDs using read tools in the background; communicate names, with an ID in parentheses only when useful for disambiguation.
-Be proactive: provide architecture advice, concise cURL/Python snippets, and concrete creation proposals instead of refusing when a safe next step is available.
-
-For ambiguous abbreviations, aliases, or acronyms, reason from the full user context and cross-reference all mentioned objects. When a related model or product family exists in NetBox, inspect its manufacturer before proposing a new one. Never hardcode vendor, model, or alias rules.
-If clarification is required, ask one concise question and append machine-readable choices as `[OPTIONS: option A | option B]`; the adapter removes this marker and exposes the choices as quick replies.
-
-1. Complete all required read lookups first.
-2. Before creating a Manufacturer or Device Type, MUST search NetBox broadly with the exact term, normalized partial terms, meaningful numeric/model tokens, and any aliases supplied by the user. Only propose creation after confirming no equivalent exists; never hardcode vendor-specific names or model rules.
-4. For a dcim.device creation, always provide name (string), site (positive integer ID), device_type (positive integer ID), role (positive integer device-role ID), and status (active by default or planned). To assign management IP: create the device first, create the IP with active status, then optionally attach it to the management interface and set primary_ip4.
-5. Produce every write Tool Call needed for the complete request before confirmation, preserving dependency order.
-6. Never claim a write succeeded before the user confirms and the MCP result is successful.
-
-The UI renders the confirmation plan in natural language. Do not put raw JSON, function calls, object_type, or argument dictionaries in user-facing text.
-Answer in the user's language.
-"""
 
 OBJECT_LABELS = {
     "dcim.site": "site",
@@ -52,12 +33,39 @@ class GatekeeperAgent:
 
     @staticmethod
     def _openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}} for t in tools]
+        visible = [t for t in tools if t.get("name") not in {"netbox_create_object", "netbox_update_object", "netbox_delete_object"}]
+        return [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}} for t in visible]
 
     @staticmethod
     def _is_write(name: str) -> bool:
-        return any(word in name.casefold() for word in ("create", "update", "delete"))
+        return name == "netbox_batch_execute" or any(word in name.casefold() for word in ("create", "update", "delete"))
 
+    @staticmethod
+    def _normalize_batch_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+        raw = arguments.get("operations", arguments.get("calls"))
+        if not isinstance(raw, list) or not raw:
+            raise ValueError("netbox_batch_execute requires a non-empty operations list")
+        operations = []
+        for index, item in enumerate(raw):
+            if not isinstance(item, dict):
+                raise ValueError(f"batch operation {index} must be an object")
+            method = item.get("method")
+            endpoint = item.get("endpoint")
+            data = item.get("data")
+            if method not in {"POST", "PATCH", "DELETE"}:
+                raise ValueError(f"batch operation {index} has invalid HTTP method")
+            if not isinstance(endpoint, str) or not endpoint.strip():
+                raise ValueError(f"batch operation {index} has invalid endpoint")
+            if not isinstance(data, dict):
+                raise ValueError(f"batch operation {index} requires a data object")
+            operations.append({"method": method, "endpoint": endpoint, "data": data})
+        return {"operations": operations}
+
+    @classmethod
+    def _normalize_write_call(cls, call: PendingToolCall) -> PendingToolCall:
+        if call.name != "netbox_batch_execute":
+            return call
+        return call.model_copy(update={"arguments": cls._normalize_batch_arguments(call.arguments)})
     def run(self, message: str, history: list[dict[str, Any]] | None = None) -> AgentResponse:
         messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         for item in (history or [])[-16:]:
@@ -67,6 +75,7 @@ class GatekeeperAgent:
         tools = self._openai_tools(self.mcp.tools())
         pending: list[PendingToolCall] = []
         results: list[ToolResult] = []
+        inspected = False
         for _ in range(self.max_turns):
             response = self.client.chat.completions.create(model=self.model, messages=messages, tools=tools, tool_choice="auto")
             assistant = response.choices[0].message
@@ -78,10 +87,20 @@ class GatekeeperAgent:
             for call in calls:
                 arguments = json.loads(call.function.arguments or "{}")
                 if self._is_write(call.function.name):
-                    pending.append(PendingToolCall(id=call.id, name=call.function.name, arguments=arguments))
+                    candidate = PendingToolCall(id=call.id, name=call.function.name, arguments=arguments)
+                    try:
+                        normalized = self._normalize_write_call(candidate)
+                        if normalized.name == "netbox_batch_execute" and not inspected:
+                            raise ValueError("Graph-First requires a read-only MCP inspection before the batch")
+                        pending.append(normalized)
+                    except ValueError as exc:
+                        results.append(ToolResult(ok=False, message=f"Batch invalide : {exc}"))
+                        messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps({"error": str(exc)})})
                     continue
                 try:
                     data = self.mcp.call(call.function.name, arguments)
+                    if call.function.name in {"netbox_inspect_tree", "netbox_get_objects", "netbox_search_objects", "netbox_get_object_by_id"}:
+                        inspected = True
                     result = ToolResult(ok=True, message="MCP read completed", data=data)
                 except Exception as exc:
                     result = ToolResult(ok=False, message=f"MCP read failed: {exc}")
@@ -101,10 +120,12 @@ class GatekeeperAgent:
 
     @staticmethod
     def _pending_message(calls: list[PendingToolCall]) -> str:
-        lines = ["Plan complet en attente de confirmation :"]
+        if len(calls) == 1 and calls[0].name == "netbox_batch_execute":
+            operations = calls[0].arguments.get("operations") or calls[0].arguments.get("calls") or []
+            return f"Change Plan prêt : {len(operations)} opération(s) NetBox regroupée(s)."
+        lines = ["Change Plan prêt :"]
         for call in calls:
             lines.append(f"• {GatekeeperAgent._describe_call(call)}")
-        lines.append("Confirmez par Oui pour exécuter toutes les étapes dans cet ordre.")
         return "\n".join(lines)
 
     @staticmethod
@@ -133,6 +154,16 @@ class GatekeeperAgent:
         if not calls:
             return AgentResponse(message="Aucune opération en attente.")
         results: list[ToolResult] = []
+        if len(calls) == 1 and calls[0].name == "netbox_batch_execute":
+            call = calls[0]
+            try:
+                plan = ChangePlan(summary="Change Plan NetBox", operations=call.arguments.get("operations", []))
+                data = self.mcp.call(call.name, plan.mcp_arguments())
+                result = ToolResult(ok=True, message="netbox_batch_execute executed", data=data)
+            except Exception as exc:
+                result = ToolResult(ok=False, message=f"netbox_batch_execute failed: {exc}")
+            results.append(result)
+            return AgentResponse(message="Batch NetBox exécuté." if result.ok else "Le batch NetBox a échoué.", tool_results=results)
         first = calls[0]
         try:
             data = self.mcp.call(first.name, first.arguments)

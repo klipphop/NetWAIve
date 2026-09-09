@@ -6,8 +6,6 @@
   const clearButton = document.getElementById("netwaive-clear");
   let conversationId = null;
   let pendingWrite = null;
-  let resetEpoch = 0;
-  let activeChatController = null;
   const TAB_KEY = "netwaive-tab-id-v1";
   const tabId = (() => {
     let value = sessionStorage.getItem(TAB_KEY);
@@ -107,19 +105,14 @@
 
     const sendQuick = async (message, approvePending = false) => {
       add("user", message);
-      const epoch = resetEpoch;
-      const controller = new AbortController();
-      activeChatController = controller;
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
         body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending }),
-        signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
       const data = await response.json();
-      if (epoch !== resetEpoch) return;
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
@@ -129,12 +122,12 @@
 
     yes.addEventListener("click", async () => {
       yes.disabled = true; no.disabled = true;
-      try { await sendQuick("oui", true); } catch (error) { if (error.name !== "AbortError") add("assistant", `Erreur : ${error.message}`); }
+      try { await sendQuick("oui", true); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
       finally { yes.disabled = false; no.disabled = false; }
     });
     no.addEventListener("click", async () => {
       yes.disabled = true; no.disabled = true;
-      try { await sendQuick("non"); } catch (error) { if (error.name !== "AbortError") add("assistant", `Erreur : ${error.message}`); }
+      try { await sendQuick("non"); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
       finally { yes.disabled = false; no.disabled = false; }
     });
 
@@ -145,31 +138,26 @@
   };
 
   clearButton?.addEventListener("click", async () => {
-    const token = document.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
     resetEpoch += 1;
     activeChatController?.abort();
     activeChatController = null;
-    try {
-      const response = await fetch("/plugins/netwaive/api/reset/", {
-        method: "POST",
-        headers: { "X-CSRFToken": token, "Cache-Control": "no-store" },
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Reset impossible");
-      messages.replaceChildren();
-      conversationId = data.active_session_id || null;
-      pendingWrite = data.pending_write || null;
-      renderPendingControls();
-    } catch (error) {
-      add("assistant", `Erreur reset : ${error.message}`);
-    }
+    const token = document.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
+    const response = await fetch("/plugins/netwaive/api/reset/", {
+      method: "POST",
+      headers: { "X-CSRFToken": token, "Content-Type": "application/json", "Cache-Control": "no-store" },
+      body: JSON.stringify({ tab_id: tabId }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Impossible de réinitialiser la session");
+    messages.replaceChildren();
+    conversationId = data.active_session_id || null;
+    pendingWrite = data.pending_write || null;
+    renderPendingControls();
   });
 
-  const historyEpoch = resetEpoch;
   fetch("/plugins/netwaive/api/history/" + "?tab_id=" + encodeURIComponent(tabId), { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => {
-      if (historyEpoch !== resetEpoch) return;
       (data.history || []).forEach(item => add(item.role, item.text));
       conversationId = data.active_session_id || conversationId;
       pendingWrite = data.pending_write || null;
@@ -196,27 +184,22 @@
     add("user", message);
     const button = form.querySelector("button");
     button.disabled = true;
-    const epoch = resetEpoch;
-    const controller = new AbortController();
-    activeChatController = controller;
     try {
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
         body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId }),
-        signal: controller.signal,
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
       const data = await response.json();
-      if (epoch !== resetEpoch) return;
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
       add("assistant", data.message || data.answer || JSON.stringify(data));
       renderPendingControls();
     } catch (error) {
-      if (error.name !== "AbortError") add("assistant", `Erreur : ${error.message}`);
+      add("assistant", `Erreur : ${error.message}`);
     } finally {
       button.disabled = false;
       input.focus();

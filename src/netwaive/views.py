@@ -15,8 +15,9 @@ from django.views.decorators.http import require_GET, require_POST
 from django.utils.translation import get_language
 
 from .config import Settings
+from .contracts import ChangePlan
 from .models import PendingToolCall
-from .v01 import build_agent
+from .copilot import build_agent
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,25 @@ def _active_session(state: dict[str, Any], requested_id: str | None = None) -> d
     return session
 
 
+def _session_for_tab(state: dict[str, Any], tab_id: str | None) -> dict[str, Any]:
+    """Return a session isolated to one browser tab, creating it on first use."""
+    tab_id = str(tab_id or "").strip()
+    if not tab_id:
+        return _active_session(state)
+    bindings = state.setdefault("tab_sessions", {})
+    session_id = bindings.get(tab_id)
+    if session_id and any(item.get("id") == session_id for item in state["sessions"]):
+        return _active_session(state, session_id)
+    used = set(bindings.values())
+    if not bindings and state.get("sessions"):
+        session = _active_session(state)
+    else:
+        session = {"id": str(uuid.uuid4()), "title": f"Session {len(state['sessions']) + 1}", "history": [], "pending_write": None, "allow_session": False}
+        state["sessions"].append(session)
+        state["sessions"] = state["sessions"][-MAX_SESSIONS:]
+    bindings[tab_id] = session["id"]
+    state["active_session_id"] = session["id"]
+    return session
 def _state_payload(state: dict[str, Any]) -> dict[str, Any]:
     active = _active_session(state)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
@@ -176,7 +196,7 @@ def _append_history(session: dict[str, Any], role: str, text: str) -> None:
 def chat(request):
     english = str(getattr(request, "LANGUAGE_CODE", None) or get_language() or "").lower().startswith("en")
     banner = "NetBox Assistant (Beta - under active development). Read/write based on global configuration. Changes require your confirmation." if english else "Assistant NetBox (Beta - en cours de développement). Lecture/écriture selon la configuration globale. Les modifications requièrent votre confirmation."
-    return render(request, "netwaive/chat.html", {"plugin_version": "0.1.6", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
+    return render(request, "netwaive/chat.html", {"plugin_version": "0.1.0", "banner": banner, "widget_title": "NetBox Assistant (Beta)" if english else "Assistant NetBox (Beta)"})
 
 
 @login_required
@@ -198,14 +218,11 @@ def health_api(request):
 @login_required
 @require_GET
 def history_api(request):
-    state = _load_state(request)
     tab_id = str(request.GET.get("tab_id") or "")
-    if tab_id:
-        active_id = state.setdefault("tab_sessions", {}).get(tab_id)
-        if active_id:
-            _active_session(state, active_id)
+    state = _load_state(request)
+    active = _session_for_tab(state, tab_id)
     _save_state(request, state)
-    return JsonResponse(_state_payload(state))
+    return JsonResponse({**_state_payload(state), "active_session_id": active["id"], "history": active.get("history", []), "pending_write": active.get("pending_write")})
 
 
 def _json_errors(view):
@@ -233,12 +250,17 @@ def chat_api(request):
     state = _load_state(request)
     request_generation = state["generation"]
     tab_id = str(body.get("tab_id") or "")
-    requested_conversation = str(body.get("conversation_id") or "") or state.setdefault("tab_sessions", {}).get(tab_id)
-    active = _active_session(state, requested_conversation or None)
+    active = _session_for_tab(state, tab_id)
+    requested_conversation = str(body.get("conversation_id") or "")
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
     agent = build_agent(_agent_settings())
     if pending and bool(body.get("approve_pending")):
-        calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
+        raw_plan = pending.get("change_plan")
+        if isinstance(raw_plan, dict):
+            plan = ChangePlan.model_validate(raw_plan)
+            calls = [PendingToolCall(id="batch", name="netbox_batch_execute", arguments=plan.mcp_arguments())]
+        else:
+            calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
         result, timeout_response = _safe_agent_call(lambda: agent.confirm(calls, message=str(pending.get("message") or ""), history=active.get("history", [])), "fr")
         if timeout_response is not None:
             return timeout_response
@@ -254,7 +276,15 @@ def chat_api(request):
             return timeout_response
         assert result is not None
         answer = result.message
-        active["pending_write"] = {"message": message, "calls": [item.model_dump() for item in result.pending_confirmation]} if result.pending_confirmation else None
+        if result.pending_confirmation:
+            batch_call = result.pending_confirmation[0]
+            try:
+                plan = ChangePlan(summary="Change Plan NetBox", operations=batch_call.arguments.get("operations", []))
+                active["pending_write"] = {"message": message, "change_plan": plan.model_dump()}
+            except Exception:
+                active["pending_write"] = {"message": message, "calls": [item.model_dump() for item in result.pending_confirmation]}
+        else:
+            active["pending_write"] = None
         status = "pending" if result.pending_confirmation else "read_only"
     if not _generation_is_current(request, request_generation):
         response = JsonResponse({"error": "Contexte réinitialisé pendant la requête.", "reset": True}, status=409)
@@ -274,10 +304,6 @@ def session_new_api(request):
     body = json.loads(request.body or b"{}")
     state = _load_state(request)
     tab_id = str(body.get("tab_id") or "")
-    if tab_id and state.setdefault("tab_sessions", {}).get(tab_id):
-        state["active_session_id"] = state["tab_sessions"][tab_id]
-        _save_state(request, state)
-        return JsonResponse(_state_payload(state))
     new_session = {"id": str(uuid.uuid4()), "title": f"Session {len(state['sessions']) + 1}", "history": [], "pending_write": None, "allow_session": False}
     state["sessions"].append(new_session)
     state["sessions"] = state["sessions"][-MAX_SESSIONS:]
@@ -294,9 +320,13 @@ def session_select_api(request):
     body = json.loads(request.body or b"{}")
     state = _load_state(request)
     requested = str(body.get("session_id") or "")
+    tab_id = str(body.get("tab_id") or "")
     if not any(item.get("id") == requested for item in state["sessions"]):
         return JsonResponse({"error": "Session inconnue."}, status=404)
     state["active_session_id"] = requested
+    tab_id = str(body.get("tab_id") or "")
+    if tab_id:
+        state.setdefault("tab_sessions", {})[tab_id] = requested
     _save_state(request, state)
     return JsonResponse(_state_payload(state))
 
@@ -307,11 +337,14 @@ def session_delete_api(request):
     body = json.loads(request.body or b"{}")
     state = _load_state(request)
     requested = str(body.get("session_id") or "")
+    tab_id = str(body.get("tab_id") or "")
     state["sessions"] = [item for item in state["sessions"] if item.get("id") != requested]
     if not state["sessions"]:
         state = _default_state()
-    elif state.get("active_session_id") == requested:
+    if state.get("active_session_id") == requested:
         state["active_session_id"] = state["sessions"][0]["id"]
+    if tab_id:
+        state.setdefault("tab_sessions", {}).pop(tab_id, None)
     _save_state(request, state)
     return JsonResponse(_state_payload(state))
 

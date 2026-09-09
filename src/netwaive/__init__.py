@@ -11,7 +11,7 @@ except ImportError:  # Tests hors environnement NetBox.
             return None
 
 from .config import Settings
-from .models import AgentResponse, PendingToolCall, ToolResult
+from .models import AgentResponse, ToolResult
 
 
 class NetWAIveConfig(PluginConfig):
@@ -25,4 +25,4 @@ class NetWAIveConfig(PluginConfig):
 
 config = NetWAIveConfig
 __version__ = "0.1.0"
-__all__ = ["AgentResponse", "PendingToolCall", "Settings", "ToolResult", "NetWAIveConfig", "config"]
+__all__ = ["AgentResponse", "Settings", "ToolResult", "NetWAIveConfig", "config"]

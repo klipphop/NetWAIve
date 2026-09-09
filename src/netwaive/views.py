@@ -16,7 +16,7 @@ from django.utils.translation import get_language
 
 from .config import Settings
 from .contracts import ChangePlan
-from .models import PendingToolCall
+from .models import ToolResult
 from .copilot import build_agent
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ def _session_for_tab(state: dict[str, Any], tab_id: str | None) -> dict[str, Any
 def _state_payload(state: dict[str, Any]) -> dict[str, Any]:
     active = _active_session(state)
     pending = active.get("pending_write") if isinstance(active.get("pending_write"), dict) else None
-    public_pending = {"message": pending.get("message"), "calls": pending.get("calls", [])} if pending else None
+    public_pending = {"message": pending.get("message"), "change_plan": pending.get("change_plan"), "calls": pending.get("calls", [])} if pending else None
     return {
         "sessions": [{"id": item["id"], "title": item.get("title", "Session")} for item in state["sessions"]],
         "active_session_id": active["id"],
@@ -256,12 +256,10 @@ def chat_api(request):
     agent = build_agent(_agent_settings())
     if pending and bool(body.get("approve_pending")):
         raw_plan = pending.get("change_plan")
-        if isinstance(raw_plan, dict):
-            plan = ChangePlan.model_validate(raw_plan)
-            calls = [PendingToolCall(id="batch", name="netbox_batch_execute", arguments=plan.mcp_arguments())]
-        else:
-            calls = [PendingToolCall.model_validate(item) for item in pending.get("calls", [])]
-        result, timeout_response = _safe_agent_call(lambda: agent.confirm(calls, message=str(pending.get("message") or ""), history=active.get("history", [])), "fr")
+        if not isinstance(raw_plan, dict):
+            return JsonResponse({"error": "Change Plan absent ou invalide."}, status=409)
+        plan = ChangePlan.model_validate(raw_plan)
+        result, timeout_response = _safe_agent_call(lambda: agent.confirm(plan), "fr")
         if timeout_response is not None:
             return timeout_response
         assert result is not None
@@ -276,16 +274,11 @@ def chat_api(request):
             return timeout_response
         assert result is not None
         answer = result.message
-        if result.pending_confirmation:
-            batch_call = result.pending_confirmation[0]
-            try:
-                plan = ChangePlan(summary="Change Plan NetBox", operations=batch_call.arguments.get("operations", []))
-                active["pending_write"] = {"message": message, "change_plan": plan.model_dump()}
-            except Exception:
-                active["pending_write"] = {"message": message, "calls": [item.model_dump() for item in result.pending_confirmation]}
+        if result.change_plan:
+            active["pending_write"] = {"message": message, "change_plan": result.change_plan.model_dump()}
         else:
             active["pending_write"] = None
-        status = "pending" if result.pending_confirmation else "read_only"
+        status = "pending" if result.change_plan else "read_only"
     if not _generation_is_current(request, request_generation):
         response = JsonResponse({"error": "Contexte réinitialisé pendant la requête.", "reset": True}, status=409)
         response["Cache-Control"] = "no-store"

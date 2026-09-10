@@ -170,7 +170,10 @@
         body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending, plan_id: approvePending ? pendingWrite?.change_plan?.id : undefined, regenerate }),
       });
       const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
+      if (!contentType.includes("application/json")) {
+        const raw = await response.text();
+        throw new Error(`Réponse HTTP ${response.status}: ${raw.slice(0, 300)}`);
+      }
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
@@ -272,7 +275,10 @@
         signal: activeChatController.signal,
       });
       const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
+      if (!contentType.includes("application/json")) {
+        const raw = await response.text();
+        throw new Error(`Réponse HTTP ${response.status}: ${raw.slice(0, 300)}`);
+      }
       const data = await response.json();
       if (epoch !== resetEpoch) return;
       if (!response.ok) throw new Error(data.error || "Erreur LLM");

@@ -27,6 +27,7 @@
 
     let resetEpoch = 0;
     let activeChatController = null;
+    let lastUserMessage = "";
 
     const LAYOUT_KEY = "netwaive-layout-v1";
     const OPEN_KEY = "netwaive-open-v1";
@@ -213,7 +214,7 @@
       if (!response.ok) throw new Error((await response.json()).error || "Feedback impossible");
     };
 
-    function addMessage(role, text, responseId = null) {
+    function addMessage(role, text, responseId = null, isLast = false) {
       const row = document.createElement("div");
       row.className = `netwaive-msg ${role}`;
       const bubble = document.createElement("span");
@@ -227,13 +228,16 @@
         bubble.textContent = text;
       }
       row.appendChild(bubble);
-      if (role === "assistant" && responseId) {
+      if (role === "assistant" && responseId && isLast) {
         const controls = document.createElement("div"); controls.className = "netwaive-feedback";
-        for (const [rating, label] of [["up", "👍"], ["down", "👎"]]) {
-          const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-link p-1"; button.textContent = label;
+        for (const [rating, label, title] of [["up", "👍", "Réponse utile"], ["down", "👎", "Réponse à améliorer"]]) {
+          const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-link p-1"; button.textContent = label; button.title = title; button.setAttribute("aria-label", title);
           button.addEventListener("click", async () => { try { await sendFeedback(responseId, rating); controls.textContent = "Merci pour votre retour."; } catch (error) { controls.textContent = `Erreur : ${error.message}`; } });
           controls.appendChild(button);
         }
+        const regenerate = document.createElement("button"); regenerate.type = "button"; regenerate.className = "btn btn-sm btn-outline-secondary"; regenerate.textContent = "↻ Régénérer";
+        regenerate.addEventListener("click", () => { if (lastUserMessage) { input.value = lastUserMessage; form.requestSubmit(); } });
+        controls.appendChild(regenerate);
         row.appendChild(controls);
       }
       messages.appendChild(row);
@@ -246,7 +250,10 @@
       intro.className = "netwaive-intro";
       intro.textContent = "Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.";
       messages.appendChild(intro);
-      state.history.forEach(item => addMessage(item.role, item.text, item.response_id || null));
+      state.history.forEach((item, index) => {
+        if (item.role === "user") lastUserMessage = item.text;
+        addMessage(item.role, item.text, item.response_id || null, item.role === "assistant" && index === state.history.length - 1);
+      });
       renderPendingControls();
     }
 
@@ -266,7 +273,12 @@
         (plan.operations || []).forEach((operation) => {
           const item = document.createElement("li");
           const identity = operation.data?.name || operation.data?.model || operation.data?.prefix || operation.data?.address || `opération ${operation.index}`;
-          item.textContent = `${operation.method} ${operation.endpoint} — ${identity}`;
+        const verbs = { POST: "Créer", PATCH: "Modifier", DELETE: "Supprimer" };
+          const details = Object.entries(operation.data || {}).filter(([key]) => key !== "slug").map(([key, value]) => {
+            const clean = typeof value === "string" ? value.replace(/\$\{(\d+)\.id\}/g, (_, n) => `résultat étape ${Number(n) + 1}`) : JSON.stringify(value);
+            return `${key}: ${clean}`;
+          }).join(" · ");
+          item.textContent = `${verbs[operation.method] || operation.method} ${identity}${details ? ` — ${details}` : ""}`;
           list.appendChild(item);
         });
         card.appendChild(list);
@@ -558,6 +570,7 @@
       event.preventDefault();
       const message = input.value.trim();
       if (!message) return;
+      lastUserMessage = message;
       input.value = "";
       addMessage("user", message);
       const button = form.querySelector("button[type='submit']");

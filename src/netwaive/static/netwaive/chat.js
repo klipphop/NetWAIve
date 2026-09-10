@@ -6,6 +6,7 @@
   const clearButton = document.getElementById("netwaive-clear");
   let conversationId = null;
   let pendingWrite = null;
+  let lastUserMessage = "";
   let resetEpoch = 0;
   let activeChatController = null;
   const TAB_KEY = "netwaive-tab-id-v1";
@@ -83,7 +84,7 @@
     if (!response.ok) throw new Error((await response.json()).error || "Feedback impossible");
   };
 
-  const add = (role, text, responseId = null) => {
+  const add = (role, text, responseId = null, isLast = false) => {
     const el = document.createElement("div");
     el.className = `mb-2 ${role === "user" ? "text-end" : ""}`;
     const box = document.createElement("span");
@@ -100,13 +101,16 @@
     }
 
     el.appendChild(box);
-    if (role === "assistant" && responseId) {
-      const controls = document.createElement("div"); controls.className = "small mt-1";
-      for (const [rating, label] of [["up", "👍"], ["down", "👎"]]) {
-        const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-link p-1"; button.textContent = label;
+    if (role === "assistant" && responseId && isLast) {
+      const controls = document.createElement("div"); controls.className = "small mt-1 d-flex align-items-center gap-1";
+      for (const [rating, label, title] of [["up", "👍", "Réponse utile"], ["down", "👎", "Réponse à améliorer"]]) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-link p-1"; button.textContent = label; button.title = title; button.setAttribute("aria-label", title);
         button.addEventListener("click", async () => { try { await sendFeedback(responseId, rating); controls.textContent = "Merci pour votre retour."; } catch (error) { controls.textContent = `Erreur : ${error.message}`; } });
         controls.appendChild(button);
       }
+      const regenerate = document.createElement("button"); regenerate.type = "button"; regenerate.className = "btn btn-sm btn-outline-secondary ms-1"; regenerate.textContent = "↻ Régénérer";
+      regenerate.addEventListener("click", async () => { if (lastUserMessage) { input.value = lastUserMessage; form.requestSubmit(); } });
+      controls.appendChild(regenerate);
       el.appendChild(controls);
     }
     messages.appendChild(el);
@@ -129,7 +133,12 @@
       (plan.operations || []).forEach((operation) => {
         const item = document.createElement("li");
         const identity = operation.data?.name || operation.data?.model || operation.data?.prefix || operation.data?.address || `opération ${operation.index}`;
-        item.textContent = `${operation.method} ${operation.endpoint} — ${identity}`;
+        const verbs = { POST: "Créer", PATCH: "Modifier", DELETE: "Supprimer" };
+        const details = Object.entries(operation.data || {}).filter(([key]) => !["slug"].includes(key)).map(([key, value]) => {
+          const clean = typeof value === "string" ? value.replace(/\$\{(\d+)\.id\}/g, (_, n) => `résultat étape ${Number(n) + 1}`) : JSON.stringify(value);
+          return `${key}: ${clean}`;
+        }).join(" · ");
+        item.textContent = `${verbs[operation.method] || operation.method} ${identity}${details ? ` — ${details}` : ""}`;
         list.appendChild(item);
       });
       card.appendChild(list);
@@ -163,7 +172,7 @@
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
-      add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null);
+      add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null, true);
       renderPendingControls();
     };
 
@@ -216,7 +225,11 @@
   fetch("/plugins/netwaive/api/history/" + "?tab_id=" + encodeURIComponent(tabId), { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => {
-      (data.history || []).forEach(item => add(item.role, item.text, item.response_id || null));
+      const history = data.history || [];
+      history.forEach((item, index) => {
+        if (item.role === "user") lastUserMessage = item.text;
+        add(item.role, item.text, item.response_id || null, item.role === "assistant" && index === history.length - 1);
+      });
       conversationId = data.active_session_id || conversationId;
       pendingWrite = data.pending_write || null;
       renderPendingControls();
@@ -238,6 +251,7 @@
     event.preventDefault();
     const message = input.value.trim();
     if (!message) return;
+    lastUserMessage = message;
     input.value = "";
     add("user", message);
     const button = form.querySelector("button");
@@ -259,7 +273,7 @@
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
-      add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null);
+      add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null, true);
       renderPendingControls();
     } catch (error) {
       add("assistant", `Erreur : ${error.message}`);

@@ -8,7 +8,7 @@ from openai import OpenAI
 
 from .contracts import ChangePlan
 from .mcp_client import MCPClient
-from .models import AgentResponse, ToolResult
+from .schemas import AgentResponse, ToolResult
 from .prompt import SYSTEM_PROMPT
 
 

@@ -206,7 +206,14 @@
       return html;
     }
 
-    function addMessage(role, text) {
+    const sendFeedback = async (responseId, rating) => {
+      const reason = rating === "down" ? (prompt("Qu’est-ce qui doit être amélioré ?") || "") : "";
+      const expected = rating === "down" ? (prompt("Reformulation attendue (facultatif) :") || "") : "";
+      const response = await fetch("/plugins/netwaive/api/feedback/", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() }, body: JSON.stringify({ tab_id: tabId, conversation_id: state.activeSessionId, response_id: responseId, rating, reason, expected_answer: expected }) });
+      if (!response.ok) throw new Error((await response.json()).error || "Feedback impossible");
+    };
+
+    function addMessage(role, text, responseId = null) {
       const row = document.createElement("div");
       row.className = `netwaive-msg ${role}`;
       const bubble = document.createElement("span");
@@ -220,6 +227,15 @@
         bubble.textContent = text;
       }
       row.appendChild(bubble);
+      if (role === "assistant" && responseId) {
+        const controls = document.createElement("div"); controls.className = "netwaive-feedback";
+        for (const [rating, label] of [["up", "👍"], ["down", "👎"]]) {
+          const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-link p-1"; button.textContent = label;
+          button.addEventListener("click", async () => { try { await sendFeedback(responseId, rating); controls.textContent = "Merci pour votre retour."; } catch (error) { controls.textContent = `Erreur : ${error.message}`; } });
+          controls.appendChild(button);
+        }
+        row.appendChild(controls);
+      }
       messages.appendChild(row);
       messages.scrollTop = messages.scrollHeight;
     }
@@ -230,7 +246,7 @@
       intro.className = "netwaive-intro";
       intro.textContent = "Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.";
       messages.appendChild(intro);
-      state.history.forEach(item => addMessage(item.role, item.text));
+      state.history.forEach(item => addMessage(item.role, item.text, item.response_id || null));
       renderPendingControls();
     }
 

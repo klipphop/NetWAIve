@@ -17,7 +17,6 @@ from django.utils.translation import get_language
 
 from .config import Settings
 from .contracts import ChangePlan
-from .models import ToolResult
 from .copilot import build_agent
 
 logger = logging.getLogger(__name__)
@@ -56,6 +55,17 @@ def _safe_agent_call(callback, language: str):
         return None, timeout_response
 
 
+
+
+def _feedback_model():
+    try:
+        from django.conf import settings
+        if not settings.configured:
+            return None
+        from .feedback_models import ResponseFeedback
+        return ResponseFeedback
+    except Exception:
+        return None
 
 
 def _plugin_config() -> dict[str, Any]:
@@ -227,11 +237,14 @@ def _can_write(user) -> bool:
     return bool(user.is_superuser or user.groups.filter(name="netbox-llm-writers").exists())
 
 
-def _append_history(session: dict[str, Any], role: str, text: str) -> None:
+def _append_history(session: dict[str, Any], role: str, text: str, response_id: str | None = None) -> None:
     history = session.setdefault("history", [])
     if history and history[-1].get("role") == role and history[-1].get("text") == text:
         return
-    history.append({"role": role, "text": text})
+    item = {"role": role, "text": text}
+    if response_id:
+        item["response_id"] = response_id
+    history.append(item)
     session["history"] = history[-MAX_HISTORY:]
 
 
@@ -298,12 +311,20 @@ def chat_api(request):
         "object": context.get("object") if isinstance(context.get("object"), dict) else None,
     }
     agent_message = message
+    Feedback = _feedback_model()
+    preferences = [] if Feedback is None else list(Feedback.objects.filter(user=request.user, rating="down").exclude(expected_answer="").order_by("-updated").values_list("reason", "expected_answer")[:3])
+    if preferences:
+        guidance = [{"reason": reason[:200], "expected_style": expected[:800]} for reason, expected in preferences]
+        agent_message += f"\n\n[Préférences de réponse validées par cet utilisateur: {json.dumps(guidance, ensure_ascii=False)}]"
     if safe_context["path"]:
-        agent_message = f"{message}\n\n[Contexte NetBox courant: {json.dumps(safe_context, ensure_ascii=False)}]"
+        agent_message += f"\n\n[Contexte NetBox courant: {json.dumps(safe_context, ensure_ascii=False)}]"
     state = _load_state(request)
     request_generation = state["generation"]
     tab_id = _valid_tab_id(body.get("tab_id"))
     active = _session_for_tab(state, tab_id)
+    last_execution = active.get("last_execution") if isinstance(active.get("last_execution"), dict) else None
+    if last_execution:
+        agent_message += f"\n\n[Dernière exécution NetBox réelle, utilisable pour une demande d'annulation/suppression: {json.dumps(last_execution, ensure_ascii=False)}]"
     requested_conversation = str(body.get("conversation_id") or "")
     if requested_conversation and requested_conversation != active["id"]:
         return JsonResponse({"error": "Conversation ou onglet périmé.", "code": "stale_conversation"}, status=409)
@@ -323,6 +344,13 @@ def chat_api(request):
             return timeout_response
         assert result is not None
         answer = result.message
+        if result.tool_results and all(item.ok for item in result.tool_results):
+            payload = result.tool_results[0].data
+            if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                active["last_execution"] = {"operations": [
+                    {"method": item.get("method"), "endpoint": item.get("endpoint"), "id": (item.get("result") or {}).get("id"), "label": item.get("label")}
+                    for item in payload["results"] if isinstance(item, dict) and item.get("method") == "POST" and isinstance((item.get("result") or {}).get("id"), int)
+                ]}
         active["pending_write"] = None
         status = "success" if result.tool_results and all(item.ok for item in result.tool_results) else "failed"
     else:
@@ -345,10 +373,11 @@ def chat_api(request):
         return response
     if len(active.get("history", [])) == 0:
         active["title"] = message[:36] + ("…" if len(message) > 36 else "")
+    response_id = str(uuid.uuid4())
     _append_history(active, "user", message)
-    _append_history(active, "assistant", answer)
+    _append_history(active, "assistant", answer, response_id=response_id)
     _save_state(request, state)
-    return JsonResponse({**_state_payload(state), "message": answer, "quick_replies": result.quick_replies, "conversation_id": active["id"], "execution_status": status})
+    return JsonResponse({**_state_payload(state), "message": answer, "response_id": response_id, "quick_replies": result.quick_replies, "conversation_id": active["id"], "execution_status": status})
 
 
 @login_required
@@ -364,6 +393,45 @@ def cancel_pending_api(request):
     active["pending_write"] = None
     _save_state(request, state)
     return JsonResponse({**_state_payload(state), "message": "Change Plan annulé.", "conversation_id": active["id"], "execution_status": "cancelled"})
+
+
+@login_required
+@require_POST
+@_json_errors
+def feedback_api(request):
+    body = json.loads(request.body or b"{}")
+    tab_id = _valid_tab_id(body.get("tab_id"))
+    conversation_id = str(body.get("conversation_id") or "")
+    response_id = str(body.get("response_id") or "")
+    rating = str(body.get("rating") or "")
+    if rating not in {"up", "down"}:
+        return JsonResponse({"error": "Évaluation invalide."}, status=400)
+    state = _load_state(request)
+    active = _session_for_tab(state, tab_id)
+    if conversation_id != active["id"]:
+        return JsonResponse({"error": "Conversation ou onglet périmé.", "code": "stale_conversation"}, status=409)
+    history = active.get("history", [])
+    answer_index = next((index for index, item in enumerate(history) if item.get("role") == "assistant" and item.get("response_id") == response_id), None)
+    if answer_index is None:
+        return JsonResponse({"error": "Réponse inconnue."}, status=404)
+    answer = str(history[answer_index].get("text") or "")
+    prompt = next((str(item.get("text") or "") for item in reversed(history[:answer_index]) if item.get("role") == "user"), "")
+    Feedback = _feedback_model()
+    if Feedback is None:
+        return JsonResponse({"error": "Feedback indisponible."}, status=503)
+    feedback, _ = Feedback.objects.update_or_create(
+        response_id=response_id,
+        defaults={
+            "user": request.user,
+            "conversation_id": active["id"],
+            "rating": rating,
+            "reason": str(body.get("reason") or "")[:500],
+            "expected_answer": str(body.get("expected_answer") or "")[:4000],
+            "prompt": prompt[:8000],
+            "answer": answer[:16000],
+        },
+    )
+    return JsonResponse({"ok": True, "response_id": str(feedback.response_id), "rating": feedback.rating})
 
 
 @login_required

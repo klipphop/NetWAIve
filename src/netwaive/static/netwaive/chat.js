@@ -72,7 +72,18 @@
     return html;
   };
 
-  const add = (role, text) => {
+  const sendFeedback = async (responseId, rating) => {
+    const reason = rating === "down" ? (prompt("Qu’est-ce qui doit être amélioré ?") || "") : "";
+    const expected = rating === "down" ? (prompt("Reformulation attendue (facultatif) :") || "") : "";
+    const response = await fetch("/plugins/netwaive/api/feedback/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
+      body: JSON.stringify({ tab_id: tabId, conversation_id: conversationId, response_id: responseId, rating, reason, expected_answer: expected }),
+    });
+    if (!response.ok) throw new Error((await response.json()).error || "Feedback impossible");
+  };
+
+  const add = (role, text, responseId = null) => {
     const el = document.createElement("div");
     el.className = `mb-2 ${role === "user" ? "text-end" : ""}`;
     const box = document.createElement("span");
@@ -89,6 +100,15 @@
     }
 
     el.appendChild(box);
+    if (role === "assistant" && responseId) {
+      const controls = document.createElement("div"); controls.className = "small mt-1";
+      for (const [rating, label] of [["up", "👍"], ["down", "👎"]]) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-link p-1"; button.textContent = label;
+        button.addEventListener("click", async () => { try { await sendFeedback(responseId, rating); controls.textContent = "Merci pour votre retour."; } catch (error) { controls.textContent = `Erreur : ${error.message}`; } });
+        controls.appendChild(button);
+      }
+      el.appendChild(controls);
+    }
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
   };
@@ -143,7 +163,7 @@
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
-      add("assistant", data.message || data.answer || JSON.stringify(data));
+      add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null);
       renderPendingControls();
     };
 
@@ -196,7 +216,7 @@
   fetch("/plugins/netwaive/api/history/" + "?tab_id=" + encodeURIComponent(tabId), { credentials: "same-origin" })
     .then(r => r.json())
     .then(data => {
-      (data.history || []).forEach(item => add(item.role, item.text));
+      (data.history || []).forEach(item => add(item.role, item.text, item.response_id || null));
       conversationId = data.active_session_id || conversationId;
       pendingWrite = data.pending_write || null;
       renderPendingControls();
@@ -239,7 +259,7 @@
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
-      add("assistant", data.message || data.answer || JSON.stringify(data));
+      add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null);
       renderPendingControls();
     } catch (error) {
       add("assistant", `Erreur : ${error.message}`);

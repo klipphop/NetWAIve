@@ -11,7 +11,7 @@ except ImportError:  # Tests hors environnement NetBox.
             return None
 
 from .config import Settings
-from .models import AgentResponse, ToolResult
+from .schemas import AgentResponse, ToolResult
 
 
 class NetWAIveConfig(PluginConfig):

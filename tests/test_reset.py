@@ -67,7 +67,7 @@ def test_stale_chat_generation_is_rejected_after_reset():
 
 def test_inflight_chat_cannot_restore_state_after_reset(monkeypatch):
     import json
-    from netwaive.models import AgentResponse
+    from netwaive.schemas import AgentResponse
 
     class Response:
         def __init__(self, payload, status=200):
@@ -176,7 +176,7 @@ def test_frontend_waits_for_backend_before_clearing_dom():
 
 def test_new_request_invalidates_previous_pending_and_session_write_scope(monkeypatch):
     import json
-    from netwaive.models import AgentResponse
+    from netwaive.schemas import AgentResponse
 
     request = dirty_request()
     state = views._load_state(request)

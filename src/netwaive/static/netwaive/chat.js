@@ -118,6 +118,21 @@
     messages.scrollTop = messages.scrollHeight;
   };
 
+  const formatOperation = (operation, index) => {
+    const data = operation.data || {};
+    const verb = { POST: "Créer", PATCH: "Modifier", DELETE: "Supprimer" }[operation.method] || operation.method;
+    const identity = data.name || data.model || data.prefix || data.address || (data.vid != null ? `VLAN ${data.vid}` : `objet ${index + 1}`);
+    const labels = { status: "statut", description: "description", enabled: "activé", mgmt_only: "gestion uniquement", type: "type", site: "site", group: "groupe VLAN", vlan: "VLAN", device: "équipement", assigned_object_id: "interface", device_type: "modèle", role: "rôle", scope_id: "site" };
+    const details = Object.entries(data).filter(([key]) => !["name", "model", "prefix", "address", "vid", "slug"].includes(key)).map(([key, value]) => {
+      let display = typeof value === "string" ? value.replace(/\$\{(\d+)\.id\}/g, (_, n) => `objet résolu à l’étape ${Number(n) + 1}`) : value;
+      if (typeof display === "string" && display.startsWith("${available_ip:")) display = "première IP libre du préfixe";
+      if (["true", "false"].includes(String(display))) display = String(display) === "true" ? "oui" : "non";
+      if (typeof display === "number") display = "objet NetBox résolu";
+      return `${labels[key] || key}: ${display}`;
+    }).join(" · ");
+    return `${verb} ${identity}${details ? ` — ${details}` : ""}`;
+  };
+
   const renderPendingControls = () => {
     document.getElementById("netwaive-confirm-wrap")?.remove();
     document.getElementById("netwaive-plan-card")?.remove();
@@ -131,49 +146,28 @@
       title.textContent = `${plan.summary || "Change Plan"} · risque ${plan.risk || "medium"}`;
       card.appendChild(title);
       const list = document.createElement("ol");
-      (plan.operations || []).forEach((operation) => {
+      (plan.operations || []).forEach((operation, index) => {
         const item = document.createElement("li");
-        const identity = operation.data?.name || operation.data?.model || operation.data?.prefix || operation.data?.address || `opération ${operation.index}`;
-        const verbs = { POST: "Créer", PATCH: "Modifier", DELETE: "Supprimer" };
-        const details = Object.entries(operation.data || {}).filter(([key]) => !["slug"].includes(key)).map(([key, value]) => {
-          const clean = typeof value === "string" ? value.replace(/\$\{(\d+)\.id\}/g, (_, n) => `résultat étape ${Number(n) + 1}`) : JSON.stringify(value);
-          return `${key}: ${clean}`;
-        }).join(" · ");
-        item.textContent = `${verbs[operation.method] || operation.method} ${identity}${details ? ` — ${details}` : ""}`;
+        item.textContent = formatOperation(operation, index);
         list.appendChild(item);
       });
       card.appendChild(list);
       messages.appendChild(card);
     }
-
     const wrap = document.createElement("div");
     wrap.id = "netwaive-confirm-wrap";
     wrap.className = "d-flex gap-2 mt-2 justify-content-end";
-
     const yes = document.createElement("button");
-    yes.type = "button";
-    yes.className = "btn btn-sm btn-success";
-    yes.textContent = "Confirmer";
-
+    yes.type = "button"; yes.className = "btn btn-sm btn-success"; yes.textContent = "Confirmer";
     const no = document.createElement("button");
-    no.type = "button";
-    no.className = "btn btn-sm btn-outline-danger";
-    no.textContent = "Annuler";
-
+    no.type = "button"; no.className = "btn btn-sm btn-outline-danger"; no.textContent = "Annuler";
     const sendQuick = async (message, approvePending = false) => {
       add("user", message);
       const regenerate = form.dataset.regenerate === "1";
       delete form.dataset.regenerate;
-      const response = await fetch("/plugins/netwaive/api/chat/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending, plan_id: approvePending ? pendingWrite?.change_plan?.id : undefined, regenerate }),
-      });
+      const response = await fetch("/plugins/netwaive/api/chat/", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" }, body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending, plan_id: approvePending ? pendingWrite?.change_plan?.id : undefined, regenerate }) });
       const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        const raw = await response.text();
-        throw new Error(`Réponse HTTP ${response.status}: ${raw.slice(0, 300)}`);
-      }
+      if (!contentType.includes("application/json")) { const raw = await response.text(); throw new Error(`Réponse HTTP ${response.status}: ${raw.slice(0, 300)}`); }
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Erreur LLM");
       conversationId = data.conversation_id || conversationId;
@@ -181,33 +175,9 @@
       add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null, true);
       renderPendingControls();
     };
-
-    yes.addEventListener("click", async () => {
-      yes.disabled = true; no.disabled = true;
-      try { await sendQuick("oui", true); } catch (error) { add("assistant", `Erreur : ${error.message}`); }
-      finally { yes.disabled = false; no.disabled = false; }
-    });
-    no.addEventListener("click", async () => {
-      yes.disabled = true; no.disabled = true;
-      try {
-        const response = await fetch("/plugins/netwaive/api/pending/cancel/", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-          body: JSON.stringify({ tab_id: tabId, conversation_id: conversationId }),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Annulation impossible");
-        pendingWrite = null;
-        add("assistant", data.message);
-        renderPendingControls();
-      } catch (error) { add("assistant", `Erreur : ${error.message}`); }
-      finally { yes.disabled = false; no.disabled = false; }
-    });
-
-    wrap.appendChild(yes);
-    wrap.appendChild(no);
-    messages.appendChild(wrap);
-    messages.scrollTop = messages.scrollHeight;
+    yes.addEventListener("click", async () => { yes.disabled = true; no.disabled = true; try { await sendQuick("oui", true); } catch (error) { add("assistant", `Erreur : ${error.message}`); } finally { yes.disabled = false; no.disabled = false; } });
+    no.addEventListener("click", async () => { yes.disabled = true; no.disabled = true; try { const response = await fetch("/plugins/netwaive/api/pending/cancel/", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" }, body: JSON.stringify({ tab_id: tabId, conversation_id: conversationId }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Annulation impossible"); pendingWrite = null; add("assistant", data.message); renderPendingControls(); } catch (error) { add("assistant", `Erreur : ${error.message}`); } finally { yes.disabled = false; no.disabled = false; } });
+    wrap.appendChild(yes); wrap.appendChild(no); messages.appendChild(wrap); messages.scrollTop = messages.scrollHeight;
   };
 
   clearButton?.addEventListener("click", async () => {

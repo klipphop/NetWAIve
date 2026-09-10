@@ -86,7 +86,8 @@
 
   const add = (role, text, responseId = null, isLast = false) => {
     const el = document.createElement("div");
-    el.className = `mb-2 ${role === "user" ? "text-end" : ""}`;
+    el.className = `mb-2 ${role === "user" ? "text-end" : "netwaive-assistant-row"}`;
+    if (role === "assistant") { el.style.display = "flex"; el.style.flexDirection = "column"; el.style.alignItems = "stretch"; }
     const box = document.createElement("span");
     box.className = role === "user" ? "badge text-bg-primary text-wrap" : "badge text-bg-light text-dark text-wrap text-start";
     box.style.maxWidth = "90%";

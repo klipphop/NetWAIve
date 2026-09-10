@@ -217,6 +217,7 @@
     function addMessage(role, text, responseId = null, isLast = false) {
       const row = document.createElement("div");
       row.className = `netwaive-msg ${role}`;
+      if (role === "assistant") { row.style.display = "flex"; row.style.flexDirection = "column"; row.style.alignItems = "stretch"; }
       const bubble = document.createElement("span");
       if (role === "assistant") {
         bubble.style.display = "block";

@@ -325,6 +325,9 @@ def chat_api(request):
     last_execution = active.get("last_execution") if isinstance(active.get("last_execution"), dict) else None
     if last_execution:
         agent_message += f"\n\n[Dernière exécution NetBox réelle, utilisable pour une demande d'annulation/suppression: {json.dumps(last_execution, ensure_ascii=False)}]"
+    if bool(body.get("regenerate")):
+        previous_answer = next((str(item.get("text") or "") for item in reversed(active.get("history", [])) if item.get("role") == "assistant"), "")
+        agent_message += f"\n\n[RÉGÉNÉRATION: critique la réponse précédente et produis une réponse différente, plus précise et plus utile. Ne répète pas simplement le même contenu. Réponse précédente: {previous_answer[:12000]}]"
     requested_conversation = str(body.get("conversation_id") or "")
     if requested_conversation and requested_conversation != active["id"]:
         return JsonResponse({"error": "Conversation ou onglet périmé.", "code": "stale_conversation"}, status=409)

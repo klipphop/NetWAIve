@@ -237,7 +237,7 @@
           controls.appendChild(button);
         }
         const regenerate = document.createElement("button"); regenerate.type = "button"; regenerate.className = "btn btn-sm btn-outline-secondary"; regenerate.textContent = "↻ Régénérer";
-        regenerate.addEventListener("click", () => { if (lastUserMessage) { input.value = lastUserMessage; form.requestSubmit(); } });
+        regenerate.addEventListener("click", () => { if (lastUserMessage) { input.value = lastUserMessage; form.dataset.regenerate = "1"; form.requestSubmit(); } });
         controls.appendChild(regenerate);
         row.appendChild(controls);
       }
@@ -579,11 +579,13 @@
       const epoch = resetEpoch;
       activeChatController?.abort();
       activeChatController = new AbortController();
+      const regenerate = form.dataset.regenerate === "1";
+      delete form.dataset.regenerate;
       try {
         const response = await fetch(api.chat, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
-          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, context: pageContext() }),
+          body: JSON.stringify({ message, tab_id: tabId, conversation_id: state.activeSessionId, context: pageContext(), regenerate }),
           signal: activeChatController.signal,
         });
         const contentType = response.headers.get("content-type") || "";

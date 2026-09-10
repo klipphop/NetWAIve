@@ -110,7 +110,7 @@
         controls.appendChild(button);
       }
       const regenerate = document.createElement("button"); regenerate.type = "button"; regenerate.className = "btn btn-sm btn-outline-secondary ms-1"; regenerate.textContent = "↻ Régénérer";
-      regenerate.addEventListener("click", async () => { if (lastUserMessage) { input.value = lastUserMessage; form.requestSubmit(); } });
+      regenerate.addEventListener("click", async () => { if (lastUserMessage) { input.value = lastUserMessage; form.dataset.regenerate = "1"; form.requestSubmit(); } });
       controls.appendChild(regenerate);
       el.appendChild(controls);
     }
@@ -162,10 +162,12 @@
 
     const sendQuick = async (message, approvePending = false) => {
       add("user", message);
+      const regenerate = form.dataset.regenerate === "1";
+      delete form.dataset.regenerate;
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending, plan_id: approvePending ? pendingWrite?.change_plan?.id : undefined }),
+        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, approve_pending: approvePending, plan_id: approvePending ? pendingWrite?.change_plan?.id : undefined, regenerate }),
       });
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) throw new Error(`Réponse HTTP ${response.status} non JSON`);
@@ -261,10 +263,12 @@
     activeChatController?.abort();
     activeChatController = new AbortController();
     try {
+      const regenerate = form.dataset.regenerate === "1";
+      delete form.dataset.regenerate;
       const response = await fetch("/plugins/netwaive/api/chat/", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" },
-        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, context: pageContext() }),
+        body: JSON.stringify({ message, tab_id: tabId, conversation_id: conversationId, context: pageContext(), regenerate }),
         signal: activeChatController.signal,
       });
       const contentType = response.headers.get("content-type") || "";

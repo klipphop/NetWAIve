@@ -20,12 +20,12 @@ class GatekeeperAgent:
 
     @staticmethod
     def _openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        allowed = {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_get_endpoint_schema", "netbox_find_available_ip", "netbox_batch_execute"}
+        allowed = {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_batch_execute"}
         return [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}} for t in tools if t.get("name") in allowed]
 
     @staticmethod
     def _is_allowed_read(name: str) -> bool:
-        return name in {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_get_endpoint_schema", "netbox_find_available_ip"}
+        return name in {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference"}
 
     @staticmethod
     def _batch(args: dict[str, Any]) -> ChangePlan:
@@ -51,22 +51,6 @@ class GatekeeperAgent:
         out.append({"role": "user", "content": message})
         return out
 
-    def _review_coverage(self, request: str, plan: ChangePlan) -> tuple[bool, list[str]]:
-        review_prompt = (
-            "Tu es un validateur strict de couverture d'un ChangePlan NetBox. "
-            "Compare la demande à toutes les opérations. Chaque objet, relation, quantité, attribution, interface, adresse, et mise à jour explicitement demandés doit être représenté. "
-            "Réponds uniquement en JSON: {\"complete\":true|false,\"missing\":[\"...\"]}. "
-            "Ne juge pas les choix techniques déjà validés par le backend.\n\n"
-            f"DEMANDE:\n{request}\n\nPLAN:\n{plan.model_dump_json()}"
-        )
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": review_prompt}],
-            response_format={"type": "json_object"},
-        )
-        payload = json.loads(response.choices[0].message.content or "{}")
-        return bool(payload.get("complete")), [str(item) for item in payload.get("missing", [])]
-
     def run(self, message: str, history: list[dict[str, Any]] | None = None) -> AgentResponse:
         messages = self._messages(message, history)
         tools = self._openai_tools(self.mcp.tools())
@@ -87,12 +71,8 @@ class GatekeeperAgent:
                         plan = self._batch(args)
                         if not inspected:
                             raise ValueError("Graph-First requires a read-only MCP inspection before the batch")
-                        self.mcp.call("netbox_batch_execute", {**plan.mcp_arguments(), "dry_run": True})
-                        complete, missing = self._review_coverage(message, plan)
-                        if not complete:
-                            raise ValueError("ChangePlan incomplet, exigences manquantes: " + "; ".join(missing))
                         return AgentResponse(message=f"Change Plan prêt : {plan.count} opération(s) NetBox regroupée(s).", change_plan=plan, tool_results=observations)
-                    except Exception as exc:
+                    except ValueError as exc:
                         result = ToolResult(ok=False, message=f"Batch invalide : {exc}")
                         observations.append(result)
                         messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
@@ -112,6 +92,27 @@ class GatekeeperAgent:
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": result.model_dump_json()})
         raise RuntimeError("LLM tool loop exceeded max_turns")
 
+    @staticmethod
+    def _execution_message(result: ToolResult, plan: ChangePlan) -> str:
+        if result.ok:
+            payload = result.data if isinstance(result.data, dict) else {}
+            rows = payload.get("results", []) if isinstance(payload.get("results"), list) else []
+            if not rows:
+                return "Opération NetBox terminée avec succès."
+            lines = [f"Opération NetBox terminée : {len(rows)} objet(s) traité(s)."]
+            for row in rows:
+                method = {"POST": "Créé", "PATCH": "Modifié", "DELETE": "Supprimé"}.get(row.get("method"), row.get("method", "Traité"))
+                lines.append(f"• {method} {row.get('label') or row.get('endpoint')}")
+            return "\n".join(lines)
+        detail = result.message.removeprefix("netbox_batch_execute failed: ").strip()
+        match = re.search(r"Unable to delete object\. (\d+) dependent objects were found: (.+)", detail, re.I)
+        if match:
+            count, dependencies = match.groups()
+            return (f"Suppression refusée par NetBox : l’objet demandé possède {count} dépendance(s).\n"
+                    f"• Dépendances détectées : {dependencies}\n"
+                    "Aucune suppression n’a été effectuée. Je peux préparer un plan séparé pour traiter ces dépendances, mais je ne les supprimerai pas automatiquement.")
+        return f"Opération NetBox non exécutée : {detail}"
+
     def confirm(self, plan: ChangePlan) -> AgentResponse:
         result = ToolResult(ok=True, message="netbox_batch_execute executed")
         try:
@@ -120,5 +121,5 @@ class GatekeeperAgent:
         except Exception as exc:
             detail = str(exc).strip()
             result = ToolResult(ok=False, message=f"netbox_batch_execute failed: {detail}")
-        message = "Batch NetBox exécuté." if result.ok else f"Le batch NetBox a échoué : {result.message.removeprefix('netbox_batch_execute failed: ')}"
+        message = self._execution_message(result, plan)
         return AgentResponse(message=message, tool_results=[result], change_plan=plan)

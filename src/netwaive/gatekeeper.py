@@ -39,6 +39,17 @@ class GatekeeperAgent:
         return name == "netbox_batch_execute"
 
     @staticmethod
+    def _render_relation_result(data: Any) -> str | None:
+        if not isinstance(data, dict) or not {"left_count", "right_count", "missing_count", "missing"}.issubset(data):
+            return None
+        lines = [f"Vérification NetBox terminée : {data.get('left_count')} objets analysés, {data.get('right_count')} relations analysées.", f"• Couverts : {data.get('covered_count')}", f"• Sans relation : {data.get('missing_count')}"]
+        missing = data.get("missing") or []
+        if missing:
+            lines.append("\nObjets sans relation :")
+            lines.extend(f"• {item.get('label') or item.get('name') or item.get('id')}" for item in missing)
+        return "\n".join(lines)
+
+    @staticmethod
     def _extract(text: str) -> tuple[str, list[str]]:
         match = re.search(r"\s*\[OPTIONS:\s*(.*?)\]\s*$", text, re.I | re.S)
         if not match:
@@ -61,6 +72,10 @@ class GatekeeperAgent:
             assistant = response.choices[0].message
             calls = list(assistant.tool_calls or [])
             if not calls:
+                for observation in reversed(observations):
+                    rendered = self._render_relation_result(observation.data)
+                    if rendered:
+                        return AgentResponse(message=rendered, tool_results=observations)
                 text, quick = self._extract(assistant.content or "")
                 return AgentResponse(message=text, tool_results=observations, quick_replies=quick)
             messages.append(assistant.model_dump(exclude_none=True))

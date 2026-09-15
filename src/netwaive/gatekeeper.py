@@ -20,12 +20,12 @@ class GatekeeperAgent:
 
     @staticmethod
     def _openai_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        allowed = {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_batch_execute"}
+        allowed = {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_get_endpoint_schema", "netbox_find_available_ip", "netbox_compare_scoped_relations", "netbox_batch_execute"}
         return [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("inputSchema", {"type": "object", "properties": {}})}} for t in tools if t.get("name") in allowed]
 
     @staticmethod
     def _is_allowed_read(name: str) -> bool:
-        return name in {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference"}
+        return name in {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_get_endpoint_schema", "netbox_find_available_ip", "netbox_compare_scoped_relations"}
 
     @staticmethod
     def _batch(args: dict[str, Any]) -> ChangePlan:

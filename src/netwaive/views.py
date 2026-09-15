@@ -311,11 +311,7 @@ def chat_api(request):
         "object": context.get("object") if isinstance(context.get("object"), dict) else None,
     }
     agent_message = message
-    Feedback = _feedback_model()
-    preferences = [] if Feedback is None else list(Feedback.objects.filter(user=request.user, rating="down").exclude(expected_answer="").order_by("-updated").values_list("reason", "expected_answer")[:3])
-    if preferences:
-        guidance = [{"reason": reason[:200], "expected_style": expected[:800]} for reason, expected in preferences]
-        agent_message += f"\n\n[Préférences de réponse validées par cet utilisateur: {json.dumps(guidance, ensure_ascii=False)}]"
+    # Feedback stored as review telemetry only; never inject user text into the LLM context.
     if safe_context["path"]:
         agent_message += f"\n\n[Contexte NetBox courant: {json.dumps(safe_context, ensure_ascii=False)}]"
     state = _load_state(request)

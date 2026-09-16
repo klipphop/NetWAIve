@@ -40,9 +40,15 @@ class GatekeeperAgent:
 
     @staticmethod
     def _render_relation_result(data: Any) -> str | None:
-        if not isinstance(data, dict) or not {"left_count", "right_count", "missing_count", "missing"}.issubset(data):
+        if not isinstance(data, dict) or not {"left_count", "right_count", "covered_count", "missing_count", "missing"}.issubset(data):
             return None
-        lines = [f"Vérification NetBox terminée : {data.get('left_count')} objets analysés, {data.get('right_count')} relations analysées.", f"• Couverts : {data.get('covered_count')}", f"• Sans relation : {data.get('missing_count')}"]
+        left_count = data.get("left_count")
+        right_count = data.get("right_count")
+        covered_count = data.get("covered_count")
+        missing_count = data.get("missing_count")
+        if not all(isinstance(value, int) for value in (left_count, right_count, covered_count, missing_count)) or right_count == 0 or covered_count + missing_count != left_count:
+            return "Vérification NetBox impossible : les totaux de la comparaison sont incohérents. Aucune liste fiable n’est présentée."
+        lines = [f"Vérification NetBox terminée : {left_count} objets analysés, {right_count} relations analysées.", f"• Couverts : {covered_count}", f"• Sans relation : {missing_count}"]
         missing = data.get("missing") or []
         if missing:
             lines.append("\nObjets sans relation :")

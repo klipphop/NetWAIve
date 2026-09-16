@@ -1,23 +1,21 @@
-NetWAIve v0.1.0 — MCP-first NetBox Copilot foundation
+NetWAIve v0.2.0 — MCP-first NetBox Copilot architecture
 
 ### Added
-- MCP-first RO/RW architecture with dynamic tool discovery.
-- Strict `ChangePlan` and `POST`/`PATCH`/`DELETE` batch contract.
-- Graph-First inspection before mutations.
-- Single Gatekeeper approval boundary for `netbox_batch_execute`.
-- Per-tab UI isolation using UUIDs in `sessionStorage`.
-- Generic IT/network expert prompt operating on NetBox as source of truth.
-- MCP gateway and orchestrator contracts with unit coverage.
+- Deterministic schema-driven relation queries with pagination and inherited scopes.
+- Generic two-sided query filters and live label resolution.
+- Single ChangePlan mutation boundary with field-level read-back verification.
+- Fail-closed rendering for inconsistent relation results.
+- Post-write verification before reporting success.
 
 ### Changed
-- Runtime entrypoints now use `copilot.py` instead of `v01.py`.
-- Legacy CRUD tools are hidden from the LLM when the modern MCP is available.
-- Pending writes are persisted as a normalized Change Plan.
+- All read operations remain silent and bypass the write Gatekeeper.
+- Mutation dependencies are resolved from live NetBox results; no business identifiers are embedded.
+- UI responses use structured business rendering instead of raw MCP JSON.
 
-### Removed
-- `v01.py` active entrypoint.
+### Security
+- User feedback remains review telemetry and is never injected into LLM instructions.
+- Per-tab session isolation and stale-plan protection remain enforced.
 
-All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

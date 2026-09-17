@@ -1,163 +1,112 @@
 # NetWAIve
 
-Package Python autonome fournissant un agent LLM à double casquette : expert IT/réseau et opérateur NetBox RO/RW. Toutes les opérations NetBox utilisent exclusivement `pynetbox`.
+NetWAIve is a NetBox plugin providing a server-side, MCP-first infrastructure assistant. The plugin keeps credentials on the server, performs read-only inspection before mutations, creates one typed French Change Plan, requires explicit approval, executes one controlled batch, and verifies the result by read-back.
 
-## Arborescence
+## Requirements
 
-```text
-netwaive/
-├── pyproject.toml
-├── setup.py
-├── .env.example
-├── README.md
-├── src/netwaive/
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── agent.py
-│   ├── cli.py
-│   ├── config.py
-│   ├── errors.py
-│   ├── models.py
-│   ├── plugin.py
-│   ├── prompt.py
-│   ├── template_content.py
-│   ├── urls.py
-│   ├── views.py
-│   ├── templates/netwaive/
-│   │   ├── chat.html
-│   │   └── floating_widget.html
-│   ├── static/netwaive/
-│   │   ├── chat.js
-│   │   ├── floating.css
-│   │   └── floating.js
-│   └── tools.py
-└── tests/
-    └── test_agent.py
-```
+- NetBox 4.4+ (tested on NetBox 4.6)
+- Python 3.11+
+- An MCP Streamable HTTP server exposing the NetWAIve tool contract
+- An OpenAI-compatible LLM endpoint with tool calling (Google AI Studio Gemini, Vertex AI OpenAI-compatible endpoint, OpenAI-compatible self-hosted providers, etc.)
 
-## Installation production
+The LLM provider is configurable. The deterministic safety boundary is Python/MCP, not the model prompt.
+
+## Build and install
 
 ```bash
-cd /chemin/netwaive
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install --upgrade pip
-pip install .
-```
-
-Installation développement :
-
-```bash
-pip install -e '.[dev]'
+python -m pip install -e '.[dev]'
 pytest
+python -m build --wheel
 ```
 
-Construction d'un wheel :
+Install the generated wheel into the NetBox virtualenv:
 
 ```bash
-python -m build
-pip install dist/netwaive-0.4.0-py3-none-any.whl
+/opt/netbox/venv/bin/pip install dist/netwaive-<version>-py3-none-any.whl
+/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py check
+/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py collectstatic --no-input
+systemctl restart netbox
 ```
 
-## Configuration
+Use the actual paths and service names of the target installation; `/opt/netbox` is only an example.
 
-```bash
-cp .env.example .env
-chmod 600 .env
-```
+## NetBox configuration
 
-Variables principales :
-
-```text
-NETBOX_LLM_NETBOX_URL=https://netbox.example.org
-NETBOX_LLM_NETBOX_TOKEN=...
-NETBOX_LLM_LLM_BASE_URL=https://api.openai.com/v1
-NETBOX_LLM_LLM_API_KEY=...
-NETBOX_LLM_LLM_MODEL=gpt-4.1-mini
-```
-
-Le token NetBox doit appliquer le moindre privilège. Utiliser un token RO pour les consultations et un token RW limité pour les mutations.
-
-## Chargement comme plugin NetBox
-
-Installer le wheel dans le venv NetBox puis ajouter le package à `configuration.py` :
+Install the wheel into the NetBox virtualenv, then configure `PLUGINS` and `PLUGINS_CONFIG` in `configuration.py`. Keep all secrets in an environment file or secret manager; do not commit them or expose them to the browser.
 
 ```python
-import os
-
-PLUGINS = [
-    "netwaive",
-]
+PLUGINS = ["netwaive"]
 
 PLUGINS_CONFIG = {
     "netwaive": {
-        "write_enabled": False,
         "netbox_url": "https://netbox.example.org",
-        "netbox_token": os.environ["NETBOX_LLM_NETBOX_TOKEN"],
+        "netbox_token": os.environ["NETWAIve_NETBOX_TOKEN"],
         "netbox_verify_ssl": True,
-        "llm_base_url": "https://api.openai.com/v1",
-        "llm_api_key": os.environ["NETBOX_LLM_LLM_API_KEY"],
-        "llm_model": "gpt-4.1-mini",
+        "llm_base_url": os.environ["NETWAIve_LLM_BASE_URL"],
+        "llm_api_key": os.environ["NETWAIve_LLM_API_KEY"],
+        "llm_model": os.environ["NETWAIve_LLM_MODEL"],
+        "mcp_server_url": os.environ["NETWAIve_MCP_URL"],
+        "mcp_auth_token": os.environ["NETWAIve_MCP_TOKEN"],
+        "llm_timeout": 120.0,
+        "max_agent_turns": 8,
     },
 }
 ```
 
-```bash
-/opt/netbox/venv/bin/pip install dist/netwaive-0.4.0-py3-none-any.whl
-/opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py check
-systemctl restart netbox netbox-rq
-```
+The MCP bearer and NetBox API token are separate credentials. Use least-privilege tokens and keep the MCP endpoint loopback-only unless external access is explicitly required.
 
-La version `0.4.0` inclut le widget global flottant/docké et une page de chat dédiée. Le widget est injecté via `PluginTemplateExtension` lorsque le plugin est activé dans `PLUGINS`.
+## Google AI Studio
 
-## Utilisation Python
-
-```python
-from netwaive import NetBoxAgent, Settings
-
-agent = NetBoxAgent(Settings())
-
-# Conseil théorique : aucun appel NetBox n'est nécessaire.
-answer = agent.run("Explique la différence entre eBGP et iBGP")
-print(answer.message)
-
-# Lecture NetBox.
-answer = agent.run("Quels devices correspondent à sw-core ?")
-print(answer.message)
-
-# Première passe : aucune écriture, retour d'une confirmation.
-preview = agent.run("Crée le device sw-02 au site paris avec le rôle switch et le modèle 9200L")
-print(preview.message)
-
-# Après confirmation explicite de l'application appelante.
-result = agent.run(
-    "Crée le device sw-02 au site paris avec le rôle switch et le modèle 9200L",
-    confirm_write=True,
-)
-print(result.message)
-```
-
-## CLI
-
-```bash
-netwaive "Explique le route-reflector BGP"
-netwaive "Recherche les devices core"
-netwaive --confirm-write "Crée le device sw-02 ..."
-```
-
-## Tools universels exposés au LLM
-
-- `netbox_read(app, endpoint, method="filter", kwargs={}, limit=50)` : lecture dynamique de toute app et tout endpoint.
-- `netbox_write(app, endpoint, action, data)` : création, mise à jour ou suppression universelle.
-- `get_endpoint_schema(app, endpoint)` : découverte OpenAPI live des méthodes, filtres et champs.
-
-Exemples :
+Gemini's OpenAI-compatible endpoint can be configured without changing the plugin:
 
 ```text
-netbox_read(app="ipam", endpoint="vlans", kwargs={"site": "fr01"})
-netbox_read(app="dcim", endpoint="cables", kwargs={"device": "sw-01"})
-get_endpoint_schema(app="dcim", endpoint="interfaces")
-netbox_read(app="plugins", endpoint="plugin_slug/endpoint_slug", kwargs={})
+NETWAIve_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+NETWAIve_LLM_MODEL=<Gemini model supporting function calling>
+NETWAIve_LLM_API_KEY=<server-side Google AI Studio key>
 ```
 
-Les outils RW sont bloqués tant qu'ils ne sont pas confirmés. Après une écriture confirmée, son résultat réel est réinjecté dans la boucle afin que l'agent puisse poursuivre un workflow multi-étapes avec les IDs retournés par NetBox.
+Validate the selected model's tool-calling behavior before enabling production writes.
+
+## Runtime behavior
+
+```text
+LLM intent
+  -> read-only MCP inspection
+  -> deterministic selection/exclusion/duplicate resolution
+  -> schema and required-field preflight
+  -> dependency validation and MCP dry-run
+  -> visual Plan de changement
+  -> explicit approval
+  -> netbox_batch_execute
+  -> field-level read-back verification
+```
+
+Required business custom fields are never invented. If the live NetBox schema requires a value without an authorized deterministic source, NetWAIve asks a structured question and creates no pending write.
+
+## Deployment checklist
+
+```bash
+python -m pytest -q
+python -m compileall -q src
+python -m build --wheel
+# install wheel into the target NetBox virtualenv
+python /path/to/netbox/netbox/manage.py check
+python /path/to/netbox/netbox/manage.py makemigrations --check --dry-run
+python /path/to/netbox/netbox/manage.py collectstatic --no-input
+# restart target services
+# verify authenticated NetBox page, MCP initialize/tools/list, and a read-only query
+```
+
+Also verify that source and served static asset hashes match after `collectstatic`. Run a browser E2E test before enabling writes in a new environment.
+
+## Security
+
+- Credentials remain server-side.
+- Read-only tools bypass the write Gatekeeper.
+- Mutations require one server-stored Change Plan and explicit approval.
+- Selection, dependencies, schemas, custom fields, and read-back are validated in Python.
+- User feedback is review telemetry only; it is never injected into LLM instructions.
+- Do not reuse production secrets in development or documentation.

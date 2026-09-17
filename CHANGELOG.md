@@ -1,4 +1,14 @@
-NetWAIve v0.2.1 — orchestration and reliability hardening
+NetWAIve v0.2.2 — portable packaging and deployment documentation
+
+### Added
+- Portable wheel installation and provider/MCP configuration documentation.
+- Clean deployment checklist for arbitrary NetBox environments.
+- Explicit Google AI Studio OpenAI-compatible configuration example.
+
+### Fixed
+- Removed obsolete version/path examples from the operator documentation.
+- Verified wheel contents include templates, static assets, and migrations.
+
 
 ### Added
 - Canonical schema-driven selection orchestration.

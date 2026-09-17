@@ -18,11 +18,11 @@ class NetWAIveConfig(PluginConfig):
     name = "netwaive"
     verbose_name = "NetBox Assistant"
     description = "Lightweight NetBox MCP client with RW approval gate."
-    version = "0.2.1"
+    version = "0.2.2"
     base_url = "netwaive"
     min_version = "4.4.0"
 
 
 config = NetWAIveConfig
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 __all__ = ["AgentResponse", "Settings", "ToolResult", "NetWAIveConfig", "config"]

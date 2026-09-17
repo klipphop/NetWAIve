@@ -28,11 +28,47 @@ class GatekeeperAgent:
         return name in {"netbox_get_objects", "netbox_get_object_by_id", "netbox_get_changelogs", "netbox_search_objects", "netbox_inspect_tree", "netbox_resolve_reference", "netbox_get_endpoint_schema", "netbox_find_available_ip", "netbox_compare_scoped_relations"}
 
     @staticmethod
+    def _validate_plan_graph(plan: ChangePlan) -> None:
+        """Reject unresolved, forward, cyclic, and unsupported plan references."""
+        ref_re = re.compile(r"\$\{(\d+)\.([A-Za-z_][A-Za-z0-9_]*)\}")
+        unsupported = re.compile(r"\$\{([^}]+)\}")
+        edges: dict[int, set[int]] = {index: set() for index in range(plan.count)}
+        for index, operation in enumerate(plan.operations):
+            values = [operation.endpoint, json.dumps(operation.data, ensure_ascii=False)]
+            for value in values:
+                for expression in unsupported.findall(value):
+                    if not re.fullmatch(r"\d+\.[A-Za-z_][A-Za-z0-9_]*", expression) and not expression.startswith("available_ip:"):
+                        raise ValueError(f"operation {index}: unsupported reference ${{{expression}}}")
+                for producer, _field in ref_re.findall(value):
+                    producer_index = int(producer)
+                    if producer_index >= plan.count:
+                        raise ValueError(f"operation {index}: reference points outside the plan: ${{{producer}.{_field}}}")
+                    if producer_index >= index:
+                        raise ValueError(f"operation {index}: forward/cyclic reference: ${{{producer}.{_field}}}")
+                    edges[index].add(producer_index)
+        visiting: set[int] = set()
+        visited: set[int] = set()
+        def visit(node: int) -> None:
+            if node in visiting:
+                raise ValueError("Change Plan contains a dependency cycle")
+            if node in visited:
+                return
+            visiting.add(node)
+            for parent in edges[node]:
+                visit(parent)
+            visiting.remove(node)
+            visited.add(node)
+        for node in edges:
+            visit(node)
+
+    @staticmethod
     def _batch(args: dict[str, Any]) -> ChangePlan:
         raw = args.get("operations", args.get("calls"))
         if not isinstance(raw, list) or not raw:
             raise ValueError("netbox_batch_execute requires a non-empty operations list")
-        return ChangePlan(summary="Change Plan NetBox", operations=raw)
+        plan = ChangePlan(summary="Change Plan NetBox", operations=raw)
+        GatekeeperAgent._validate_plan_graph(plan)
+        return plan
 
     @staticmethod
     def _is_write(name: str) -> bool:

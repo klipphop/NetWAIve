@@ -4,6 +4,8 @@ from typing import Any
 
 from .contracts import BatchOperation, ChangePlan
 from .mcp_gateway import MCPGateway
+from .selection import SelectionResult
+from .selection_engine import SelectionEngine
 
 
 class CopilotOrchestrator:
@@ -20,6 +22,33 @@ class CopilotOrchestrator:
             "params": params or {},
         })
 
+    def select(
+        self,
+        payload: Any,
+        *,
+        endpoint: str,
+        key_field: str = "id",
+        label_fields: tuple[str, ...] = (),
+        exclude_keys: dict[str, str] | None = None,
+        duplicate_keys: set[str] | None = None,
+    ) -> SelectionResult:
+        """Convert a live MCP collection into a canonical selection."""
+        return SelectionEngine().build(
+            payload,
+            endpoint=endpoint,
+            key_field=key_field,
+            label_fields=label_fields,
+            exclude_keys=exclude_keys,
+            duplicate_keys=duplicate_keys,
+        )
+
+    @staticmethod
+    def attach_selection(plan: ChangePlan, selection: SelectionResult) -> ChangePlan:
+        """Bind the audited selection to the immutable plan payload."""
+        selection.validate_consistency()
+        if not selection.selected:
+            raise ValueError("cannot attach an empty selection to a ChangePlan")
+        return ChangePlan.model_validate({**plan.model_dump(), "selection": selection.model_dump()})
     def validate(self, plan: ChangePlan) -> ChangePlan:
         """Validate all operations before the first remote mutation."""
         for operation in plan.operations:

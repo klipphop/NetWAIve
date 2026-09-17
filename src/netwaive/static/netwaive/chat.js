@@ -15,6 +15,21 @@
     if (!value) { value = crypto.randomUUID(); sessionStorage.setItem(TAB_KEY, value); }
     return value;
   })();
+  const NAV_KEY = "netwaive-navigation-v1";
+  const navKey = `${NAV_KEY}:${tabId}:${location.pathname}`;
+  const saveNavigation = () => {
+    try { sessionStorage.setItem(navKey, JSON.stringify({ pageY: window.scrollY, chatY: messages.scrollTop })); } catch {}
+  };
+  const restoreNavigation = () => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(navKey) || "null");
+      if (!saved) return;
+      requestAnimationFrame(() => { window.scrollTo({ top: Number(saved.pageY) || 0, behavior: "instant" }); messages.scrollTop = Number(saved.chatY) || 0; });
+    } catch {}
+  };
+  window.addEventListener("pagehide", saveNavigation);
+  window.addEventListener("scroll", saveNavigation, { passive: true });
+  messages.addEventListener("scroll", saveNavigation, { passive: true });
 
   const pageContext = () => {
     const match = location.pathname.match(/^\/(?:plugins\/)?([^/]+)\/([^/]+)\/(\d+)\/?/);
@@ -82,6 +97,21 @@
       body: JSON.stringify({ tab_id: tabId, conversation_id: conversationId, response_id: responseId, rating, reason, expected_answer: expected }),
     });
     if (!response.ok) throw new Error((await response.json()).error || "Feedback impossible");
+  };
+
+  const renderQuickReplies = (replies) => {
+    if (!Array.isArray(replies) || !replies.length) return;
+    const wrap = document.createElement("div");
+    wrap.className = "netwaive-quick-replies d-flex flex-wrap gap-2 mt-1";
+    replies.slice(0, 6).forEach((reply) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm btn-outline-primary";
+      button.textContent = reply;
+      button.addEventListener("click", () => { input.value = reply; form.requestSubmit(); });
+      wrap.appendChild(button);
+    });
+    messages.appendChild(wrap);
   };
 
   const add = (role, text, responseId = null, isLast = false) => {
@@ -173,7 +203,9 @@
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
       add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null, true);
+      renderQuickReplies(data.quick_replies);
       renderPendingControls();
+      restoreNavigation();
     };
     yes.addEventListener("click", async () => { yes.disabled = true; no.disabled = true; try { await sendQuick("oui", true); } catch (error) { add("assistant", `Erreur : ${error.message}`); } finally { yes.disabled = false; no.disabled = false; } });
     no.addEventListener("click", async () => { yes.disabled = true; no.disabled = true; try { const response = await fetch("/plugins/netwaive/api/pending/cancel/", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "" }, body: JSON.stringify({ tab_id: tabId, conversation_id: conversationId }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || "Annulation impossible"); pendingWrite = null; add("assistant", data.message); renderPendingControls(); } catch (error) { add("assistant", `Erreur : ${error.message}`); } finally { yes.disabled = false; no.disabled = false; } });
@@ -209,6 +241,7 @@
       conversationId = data.active_session_id || conversationId;
       pendingWrite = data.pending_write || null;
       renderPendingControls();
+      restoreNavigation();
     })
     .catch(() => {});
 
@@ -255,7 +288,9 @@
       conversationId = data.conversation_id || conversationId;
       pendingWrite = data.pending_write || null;
       add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null, true);
+      renderQuickReplies(data.quick_replies);
       renderPendingControls();
+      restoreNavigation();
     } catch (error) {
       add("assistant", `Erreur : ${error.message}`);
     } finally {

@@ -28,6 +28,21 @@
     let resetEpoch = 0;
     let activeChatController = null;
     let lastUserMessage = "";
+    const NAV_KEY = "netwaive-navigation-v1";
+    const navKey = `${NAV_KEY}:${tabId}:${location.pathname}`;
+    const saveNavigation = () => {
+      try { sessionStorage.setItem(navKey, JSON.stringify({ pageY: window.scrollY, chatY: messages.scrollTop })); } catch {}
+    };
+    const restoreNavigation = () => {
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(navKey) || "null");
+        if (!saved) return;
+        requestAnimationFrame(() => { window.scrollTo({ top: Number(saved.pageY) || 0, behavior: "instant" }); messages.scrollTop = Number(saved.chatY) || 0; });
+      } catch {}
+    };
+    window.addEventListener("pagehide", saveNavigation);
+    window.addEventListener("scroll", saveNavigation, { passive: true });
+    messages.addEventListener("scroll", saveNavigation, { passive: true });
 
     const LAYOUT_KEY = "netwaive-layout-v1";
     const OPEN_KEY = "netwaive-open-v1";
@@ -245,18 +260,31 @@
       messages.scrollTop = messages.scrollHeight;
     }
 
-    function renderConversation() {
-      messages.replaceChildren();
-      const intro = document.createElement("div");
-      intro.className = "netwaive-intro";
-      intro.textContent = "Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.";
-      messages.appendChild(intro);
-      state.history.forEach((item, index) => {
-        if (item.role === "user") lastUserMessage = item.text;
-        addMessage(item.role, item.text, item.response_id || null, item.role === "assistant" && index === state.history.length - 1);
-      });
-      renderPendingControls();
-    }
+      const renderQuickReplies = (replies) => {
+        if (!Array.isArray(replies) || !replies.length) return;
+        const wrap = document.createElement("div");
+        wrap.className = "netwaive-quick-replies d-flex flex-wrap gap-2 mt-1";
+        replies.slice(0, 6).forEach((reply) => {
+          const button = document.createElement("button");
+          button.type = "button"; button.className = "btn btn-sm btn-outline-primary"; button.textContent = reply;
+          button.addEventListener("click", () => { input.value = reply; form.requestSubmit(); });
+          wrap.appendChild(button);
+        });
+        messages.appendChild(wrap);
+      };
+
+      const renderConversation = () => {
+        messages.replaceChildren();
+        const intro = document.createElement("div");
+        intro.className = "netwaive-intro";
+        intro.textContent = "Assistant NetBox. Lecture/écriture selon la configuration globale. Les écritures demandent une confirmation.";
+        messages.appendChild(intro);
+        state.history.forEach((item, index) => {
+          if (item.role === "user") lastUserMessage = item.text;
+          addMessage(item.role, item.text, item.response_id || null, item.role === "assistant" && index === state.history.length - 1);
+        });
+        renderPendingControls();
+      };
 
     function renderPendingControls() {
       messages.querySelector("#netwaive-confirm-wrap")?.remove();
@@ -314,6 +342,8 @@
         state.ui = { ...state.ui, ...(data.ui || {}) };
         renderTabs();
         renderConversation();
+        renderQuickReplies(data.quick_replies);
+        restoreNavigation();
       };
       yes.addEventListener("click", async () => {
         yes.disabled = true; no.disabled = true;
@@ -469,6 +499,8 @@
         state.ui = { ...state.ui, ...(data.ui || {}) };
         renderTabs();
         renderConversation();
+        renderQuickReplies(data.quick_replies);
+        restoreNavigation();
       } catch (error) {
         state.history = [];
         renderConversation();
@@ -600,6 +632,8 @@
         state.ui = { ...state.ui, ...(data.ui || {}) };
         renderTabs();
         renderConversation();
+        renderQuickReplies(data.quick_replies);
+        restoreNavigation();
       } catch (error) {
         addMessage("assistant", `Erreur : ${error.message}`);
       } finally {

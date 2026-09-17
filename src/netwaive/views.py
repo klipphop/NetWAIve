@@ -376,7 +376,7 @@ def chat_api(request):
     _append_history(active, "user", message)
     _append_history(active, "assistant", answer, response_id=response_id)
     _save_state(request, state)
-    return JsonResponse({**_state_payload(state), "message": answer, "response_id": response_id, "quick_replies": result.quick_replies, "conversation_id": active["id"], "execution_status": status})
+    return JsonResponse({**_state_payload(state), "message": answer, "response_id": response_id, "quick_replies": result.quick_replies, "question": result.question.model_dump() if result.question else None, "conversation_id": active["id"], "execution_status": status})
 
 
 @login_required

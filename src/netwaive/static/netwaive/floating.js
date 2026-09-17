@@ -306,7 +306,7 @@
         card.id = "netwaive-plan-card";
         card.className = "alert alert-warning mt-2 text-start";
         const title = document.createElement("strong");
-        title.textContent = `${plan.summary || "Change Plan"} · risque ${plan.risk || "medium"}`;
+        title.textContent = `${plan.summary || "Plan de changement"} · risque ${plan.risk === "low" ? "faible" : plan.risk === "high" ? "élevé" : "moyen"}`;
         card.appendChild(title);
         const list = document.createElement("ol");
         (plan.operations || []).forEach((operation) => {

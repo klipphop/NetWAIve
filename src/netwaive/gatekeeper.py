@@ -132,12 +132,12 @@ class GatekeeperAgent:
                         plan = self._batch(args)
                         if not inspected:
                             raise ValueError("Graph-First requires a read-only MCP inspection before the batch")
-                        dry_run_args = {"operations": [item.model_dump() for item in plan.operations], "dry_run": True}
+                        dry_run_args = {"operations": [item.model_dump() for item in plan.operations], "selection": plan.selection.model_dump() if plan.selection else None, "dry_run": True}
                         try:
                             self.mcp.call("netbox_batch_execute", dry_run_args)
                         except Exception as exc:
                             raise ValueError(f"Préflight NetBox refusé : {exc}") from exc
-                        return AgentResponse(message=f"Change Plan prêt : {plan.count} opération(s) NetBox regroupée(s).", change_plan=plan, tool_results=observations)
+                        return AgentResponse(message=f"Plan de changement prêt : {plan.count} opération(s) NetBox regroupée(s).", change_plan=plan, tool_results=observations)
                     except ValueError as exc:
                         result = ToolResult(ok=False, message=f"Batch invalide : {exc}")
                         observations.append(result)

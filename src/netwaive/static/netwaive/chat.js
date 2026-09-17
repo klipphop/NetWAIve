@@ -112,6 +112,16 @@
     messages.appendChild(wrap);
   };
 
+  const renderQuestion = (question) => {
+    if (!question) return;
+    const wrap = document.createElement("div"); wrap.className = "netwaive-question d-flex flex-wrap gap-2 mt-1";
+    (question.options || []).forEach((option) => {
+      const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-primary"; button.textContent = option.label;
+      button.addEventListener("click", () => { input.value = option.value; form.requestSubmit(); }); wrap.appendChild(button);
+    });
+    messages.appendChild(wrap);
+  };
+
   const add = (role, text, responseId = null, isLast = false) => {
     const el = document.createElement("div");
     el.className = `mb-2 ${role === "user" ? "text-end" : "netwaive-assistant-row"}`;
@@ -184,7 +194,7 @@
       card.id = "netwaive-plan-card";
       card.className = "alert alert-warning mt-2 text-start";
       const title = document.createElement("strong");
-      title.textContent = `${plan.summary || "Change Plan"} · risque ${plan.risk || "medium"}`;
+      title.textContent = `${plan.summary || "Plan de changement"} · risque ${plan.risk === "low" ? "faible" : plan.risk === "high" ? "élevé" : "moyen"}`;
       card.appendChild(title);
       const list = document.createElement("ol");
       (plan.operations || []).forEach((operation, index) => {
@@ -215,6 +225,7 @@
       pendingWrite = data.pending_write || null;
       add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null, true);
       renderQuickReplies(data.quick_replies);
+      renderQuestion(data.question);
       renderPendingControls();
       restoreNavigation();
     };
@@ -300,6 +311,7 @@
       pendingWrite = data.pending_write || null;
       add("assistant", data.message || data.answer || JSON.stringify(data), data.response_id || null, true);
       renderQuickReplies(data.quick_replies);
+      renderQuestion(data.question);
       renderPendingControls();
       restoreNavigation();
     } catch (error) {

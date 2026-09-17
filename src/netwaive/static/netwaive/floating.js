@@ -222,9 +222,7 @@
       return html;
     }
 
-    const sendFeedback = async (responseId, rating) => {
-      const reason = rating === "down" ? (prompt("Qu’est-ce qui doit être amélioré ?") || "") : "";
-      const expected = rating === "down" ? (prompt("Reformulation attendue (facultatif) :") || "") : "";
+    const sendFeedback = async (responseId, rating, reason = "", expected = "") => {
       const response = await fetch("/plugins/netwaive/api/feedback/", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() }, body: JSON.stringify({ tab_id: tabId, conversation_id: state.activeSessionId, response_id: responseId, rating, reason, expected_answer: expected }) });
       if (!response.ok) throw new Error((await response.json()).error || "Feedback impossible");
     };
@@ -248,7 +246,19 @@
         const controls = document.createElement("div"); controls.className = "netwaive-feedback";
         for (const [rating, label, title] of [["up", "👍", "Réponse utile"], ["down", "👎", "Réponse à améliorer"]]) {
           const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-link p-1"; button.textContent = label; button.title = title; button.setAttribute("aria-label", title);
-          button.addEventListener("click", async () => { try { await sendFeedback(responseId, rating); controls.textContent = "Merci pour votre retour."; } catch (error) { controls.textContent = `Erreur : ${error.message}`; } });
+          button.addEventListener("click", async () => {
+            try {
+              if (rating === "down") {
+                const editor = document.createElement("div"); editor.className = "netwaive-feedback-editor d-flex gap-1 mt-1";
+                const field = document.createElement("textarea"); field.rows = 2; field.maxLength = 500; field.placeholder = "Que faut-il améliorer ?"; field.className = "form-control form-control-sm";
+                const submit = document.createElement("button"); submit.type = "button"; submit.className = "btn btn-sm btn-primary"; submit.textContent = "Envoyer";
+                editor.append(field, submit); controls.after(editor);
+                submit.addEventListener("click", async () => { await sendFeedback(responseId, rating, field.value, ""); editor.remove(); controls.textContent = "Merci pour votre retour."; });
+                return;
+              }
+              await sendFeedback(responseId, rating); controls.textContent = "Merci pour votre retour.";
+            } catch (error) { controls.textContent = `Erreur : ${error.message}`; }
+          });
           controls.appendChild(button);
         }
         const regenerate = document.createElement("button"); regenerate.type = "button"; regenerate.className = "btn btn-sm btn-outline-secondary"; regenerate.textContent = "↻ Régénérer";

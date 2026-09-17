@@ -7,6 +7,9 @@ from urllib.parse import unquote
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+from .selection import SelectionResult
+
+
 class BatchOperation(BaseModel):
     """One normalized NetBox REST mutation."""
 
@@ -43,10 +46,14 @@ class ChangePlan(BaseModel):
     operations: list[BatchOperation] = Field(min_length=1)
     affected_objects: list[dict[str, Any]] = Field(default_factory=list)
     dependencies: list[dict[str, Any]] = Field(default_factory=list)
+    selection: SelectionResult | None = None
     risk: Literal["low", "medium", "high"] = "medium"
 
     def mcp_arguments(self) -> dict[str, Any]:
-        return {"operations": [item.model_dump() for item in self.operations]}
+        payload = {"operations": [item.model_dump() for item in self.operations]}
+        if self.selection is not None:
+            payload["selection"] = self.selection.model_dump()
+        return payload
 
     @property
     def count(self) -> int:

@@ -7,6 +7,7 @@ from typing import Any
 from openai import OpenAI
 
 from .contracts import ChangePlan
+from .selection import SelectionResult, selection_from_payload
 from .mcp_client import MCPClient
 from .schemas import AgentResponse, ToolResult
 from .prompt import SYSTEM_PROMPT
@@ -66,7 +67,10 @@ class GatekeeperAgent:
         raw = args.get("operations", args.get("calls"))
         if not isinstance(raw, list) or not raw:
             raise ValueError("netbox_batch_execute requires a non-empty operations list")
-        plan = ChangePlan(summary="Change Plan NetBox", operations=raw)
+        selection = selection_from_payload(args.get("selection"))
+        if selection is not None and not selection.selected:
+            raise ValueError("selection contains no selected items")
+        plan = ChangePlan(summary="Change Plan NetBox", operations=raw, selection=selection)
         GatekeeperAgent._validate_plan_graph(plan)
         return plan
 

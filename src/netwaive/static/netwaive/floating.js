@@ -283,6 +283,16 @@
         messages.appendChild(wrap);
       };
 
+      const renderQuestion = (question) => {
+        if (!question) return;
+        const wrap = document.createElement("div"); wrap.className = "netwaive-question d-flex flex-wrap gap-2 mt-1";
+        (question.options || []).forEach((option) => {
+          const button = document.createElement("button"); button.type = "button"; button.className = "btn btn-sm btn-primary"; button.textContent = option.label;
+          button.addEventListener("click", () => { input.value = option.value; form.requestSubmit(); }); wrap.appendChild(button);
+        });
+        messages.appendChild(wrap);
+      };
+
       const renderConversation = () => {
         messages.replaceChildren();
         const intro = document.createElement("div");
@@ -353,6 +363,7 @@
         renderTabs();
         renderConversation();
         renderQuickReplies(data.quick_replies);
+        renderQuestion(data.question);
         restoreNavigation();
       };
       yes.addEventListener("click", async () => {
@@ -510,6 +521,7 @@
         renderTabs();
         renderConversation();
         renderQuickReplies(data.quick_replies);
+        renderQuestion(data.question);
         restoreNavigation();
       } catch (error) {
         state.history = [];
@@ -643,6 +655,7 @@
         renderTabs();
         renderConversation();
         renderQuickReplies(data.quick_replies);
+        renderQuestion(data.question);
         restoreNavigation();
       } catch (error) {
         addMessage("assistant", `Erreur : ${error.message}`);

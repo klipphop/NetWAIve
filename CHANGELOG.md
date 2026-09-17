@@ -1,4 +1,17 @@
-NetWAIve v0.2.0 — MCP-first NetBox Copilot architecture
+NetWAIve v0.2.1 — orchestration and reliability hardening
+
+### Added
+- Canonical schema-driven selection orchestration.
+- Auditable candidates, selections, exclusions, and duplicate handling.
+- ChangePlan dependency-graph validation and MCP dry-run preflight.
+- Post-write field verification and improved navigation persistence.
+- Structured quick replies and inline feedback capture.
+
+### Fixed
+- Reject forward/cyclic references before approval.
+- Reject selected objects marked as existing duplicates.
+- Avoid raw MCP JSON and invalid relation totals in user responses.
+
 
 ### Added
 - Deterministic schema-driven relation queries with pagination and inherited scopes.

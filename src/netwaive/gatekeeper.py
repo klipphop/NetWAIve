@@ -9,7 +9,7 @@ from openai import OpenAI
 from .contracts import ChangePlan
 from .selection import SelectionResult, selection_from_payload
 from .mcp_client import MCPClient
-from .schemas import AgentResponse, ToolResult
+from .schemas import AgentResponse, ToolResult, QuestionOption, UserQuestion
 from .prompt import SYSTEM_PROMPT
 
 
@@ -96,6 +96,20 @@ class GatekeeperAgent:
         return "\n".join(lines)
 
     @staticmethod
+    def _parse_question(text: str) -> tuple[str, list[str], UserQuestion | None]:
+        match = re.search(r"\s*\[OPTIONS:\s*(.*?)\]\s*$", text, re.I | re.S)
+        if match:
+            clean = text[:match.start()].rstrip()
+            options = [x.strip() for x in match.group(1).split("|") if x.strip()]
+            kind = "boolean" if {x.casefold() for x in options} == {"oui", "non"} else "choice"
+            question = UserQuestion(kind=kind, prompt=clean, options=[QuestionOption(value=x, label=x) for x in options])
+            return clean, options, question
+        if re.search(r"\b(oui ou non|souhaitez-vous|voulez-vous|faut-il|dois-je)\b", text, re.I) and "?" in text:
+            options = ["Oui", "Non"]
+            return text.strip(), options, UserQuestion(kind="boolean", prompt=text.strip(), options=[QuestionOption(value="oui", label="Oui"), QuestionOption(value="non", label="Non")])
+        return text, [], None
+
+    @staticmethod
     def _extract(text: str) -> tuple[str, list[str]]:
         match = re.search(r"\s*\[OPTIONS:\s*(.*?)\]\s*$", text, re.I | re.S)
         if not match:
@@ -122,8 +136,8 @@ class GatekeeperAgent:
                     rendered = self._render_relation_result(observation.data)
                     if rendered:
                         return AgentResponse(message=rendered, tool_results=observations)
-                text, quick = self._extract(assistant.content or "")
-                return AgentResponse(message=text, tool_results=observations, quick_replies=quick)
+                text, quick, question = self._parse_question(assistant.content or "")
+                return AgentResponse(message=text, tool_results=observations, quick_replies=quick, question=question)
             messages.append(assistant.model_dump(exclude_none=True))
             for call in calls:
                 args = json.loads(call.function.arguments or "{}")
